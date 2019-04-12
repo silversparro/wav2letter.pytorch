@@ -106,7 +106,7 @@ class Cov1dBlock(nn.Module):
         return output
 
 class WaveToLetter(nn.Module):
-    def __init__(self, labels="abc",audio_conf=None):
+    def __init__(self,sample_rate,window_size, labels="abc",audio_conf=None):
         super(WaveToLetter, self).__init__()
 
         # model metadata needed for serialization/deserialization
@@ -115,8 +115,13 @@ class WaveToLetter(nn.Module):
         self._version = '0.0.1'
         self._audio_conf = audio_conf or {}
         self._labels = labels
+        self._sample_rate=sample_rate
+        self._window_size=window_size
 
-        conv1 =  Cov1dBlock(input_size=81,output_size=256,kernal_size=(11,),stride=2,dilation=1,drop_out_prob=0.2,padding='same')
+        nfft = (self._sample_rate * self._window_size)
+        input_size = int(1+(nfft/2))
+
+        conv1 =  Cov1dBlock(input_size=input_size,output_size=256,kernal_size=(11,),stride=2,dilation=1,drop_out_prob=0.2,padding='same')
         conv2s = []
         conv2s.append(('conv1d_{}'.format(0),conv1))
         inputSize = 256
@@ -174,7 +179,8 @@ class WaveToLetter(nn.Module):
     @classmethod
     def load_model(cls, path, cuda=False):
         package = torch.load(path, map_location=lambda storage, loc: storage)
-        model = cls(labels=package['labels'], audio_conf=package['audio_conf'],)
+        model = cls(labels=package['labels'], audio_conf=package['audio_conf'],sample_rate=package["sample_rate"]
+                    ,window_size=package["window_size"])
         # the blacklist parameters are params that were previous erroneously saved by the model
         # care should be taken in future versions that if batch_norm on the first rnn is required
         # that it be named something else
@@ -198,7 +204,8 @@ class WaveToLetter(nn.Module):
 
     @classmethod
     def load_model_package(cls, package, cuda=False):
-        model = cls(labels=package['labels'], audio_conf=package['audio_conf'])
+        model = cls(labels=package['labels'], audio_conf=package['audio_conf'],sample_rate=package["sample_rate"]
+                    ,window_size=package["window_size"])
         model.load_state_dict(package['state_dict'])
         if cuda:
             model = torch.nn.DataParallel(model).cuda()
@@ -235,6 +242,14 @@ class WaveToLetter(nn.Module):
     def get_labels(model):
         model_is_cuda = next(model.parameters()).is_cuda
         return model.module._labels if model_is_cuda else model._labels
+    @staticmethod
+    def get_sample_rate(model):
+        model_is_cuda = next(model.parameters()).is_cuda
+        return model.module._sample_rate if model_is_cuda else model._sample_rate
+    @staticmethod
+    def get_window_size(model):
+        model_is_cuda = next(model.parameters()).is_cuda
+        return model.module._window_size if model_is_cuda else model._window_size
     @staticmethod
     def setAudioConfKey(model,key,value):
         model._audio_conf[key] = value
