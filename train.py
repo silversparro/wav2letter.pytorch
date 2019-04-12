@@ -17,9 +17,9 @@ import Levenshtein as Lev
 
 parser = argparse.ArgumentParser(description='Wav2Letter training')
 parser.add_argument('--train-manifest', metavar='DIR',
-                    help='path to train manifest csv', default='/media/yoda/gargantua/data_pb/data/firefoxvoicedata/cv_corpus_v1/cv_corpus_v1/cv-other-train_fords2_max8Secs.csv')
+                    help='path to train manifest csv', default='~/data/train.csv')
 parser.add_argument('--val-manifest', metavar='DIR',
-                    help='path to validation manifest csv', default='/media/yoda/gargantua/data_pb/data/firefoxvoicedata/cv_corpus_v1/cv_corpus_v1/cv-other-dev_fords2_max8Secs.csv')
+                    help='path to validation manifest csv', default='~/data/validation.csv')
 parser.add_argument('--sample-rate', default=16000, type=int, help='Sample rate')
 parser.add_argument('--batch-size', default=16, type=int, help='Batch size for training')
 parser.add_argument('--num-workers', default=0, type=int, help='Number of workers used in data-loading')
@@ -44,8 +44,8 @@ parser.add_argument('--tensorboard', default=True,dest='tensorboard', action='st
 parser.add_argument('--log-dir', default='visualize/w2lOnMozillaDataAftr118Epch', help='Location of tensorboard log')
 parser.add_argument('--log-params', dest='log_params', action='store_true', help='Log parameter values and gradients')
 parser.add_argument('--id', default='Wav2Letter training', help='Identifier for visdom/tensorboard run')
-parser.add_argument('--save-folder', default='/media/yoda/gargantua/data_pb/models/customer/w2lOnMozillaDataAftr118Epch', help='Location to save epoch models')
-parser.add_argument('--model-path', default='/media/yoda/gargantua/data_pb/models/customer/w2lOnMozillaDataAftr118Epch/wav2Letter_final.pth.tar',
+parser.add_argument('--save-folder', default='~/models/wave2Letter', help='Location to save epoch models')
+parser.add_argument('--model-path', default='~/models/wave2Letter/wav2Letter_final.pth.tar',
                     help='Location to save best validation model')
 parser.add_argument('--continue-from', default='', help='Continue from checkpoint model')
 parser.add_argument('--finetune', default=False,dest='finetune', action='store_true',
