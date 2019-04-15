@@ -22,14 +22,15 @@ windows = {'hamming': scipy.signal.hamming, 'hann': scipy.signal.hann, 'blackman
 
 
 def load_audio(path):
-    sound, _ = torchaudio.load(path)
-    sound = sound.numpy()
+    sound, _ = torchaudio.load(path, normalization=True)
+    sound = sound.numpy().T
     if len(sound.shape) > 1:
         if sound.shape[1] == 1:
             sound = sound.squeeze()
         else:
             sound = sound.mean(axis=1)  # multiple channels, average
     return sound
+
 
 def normalize_tf_data(signal):
     return signal / np.max(np.abs(signal))
@@ -60,7 +61,7 @@ def split_normalize_with_librosa(
     for idx, (start, end) in enumerate(edges[skip_idx:]):
         segment = audio[start:end]
         if start==end:
-            print "Warning: splitting in librosa resulted in an empty segment"
+            print ("Warning: splitting in librosa resulted in an empty segment")
             continue
         new_audio[start:end] = librosa.util.normalize(segment)
 

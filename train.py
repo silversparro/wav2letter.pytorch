@@ -2,13 +2,16 @@ import argparse
 import errno
 import json
 import os
+import random
 import time
+
+import numpy as np
 import torch.distributed as dist
 import torch.utils.data.distributed
 from torch.autograd import Variable
 from tqdm import tqdm
 from warpctc_pytorch import CTCLoss
-
+from apex import amp
 from data.data_loader import AudioDataLoader, SpectrogramDataset, BucketingSampler, DistributedBucketingSampler
 from data.distributed import DistributedDataParallel
 from decoder import GreedyDecoder
@@ -32,6 +35,7 @@ parser.add_argument('--epochs', default=200, type=int, help='Number of training 
 parser.add_argument('--cuda', default=True,dest='cuda', action='store_true', help='Use cuda to train model')
 parser.add_argument('--usePcen', default=True,dest='pcen', action='store_true', help='Use pcen features')
 parser.add_argument('--lr', '--learning-rate', default=1e-5, type=float, help='initial learning rate')
+parser.add_argument('--mixPrec',dest='mixPrec',default=False,action='store_true', help='use mix precision for training')
 parser.add_argument('--reg-scale', dest='reg_scale', default=0.9, type=float, help='L2 regularizationScale')
 parser.add_argument('--momentum', default=0.90, type=float, help='momentum')
 parser.add_argument('--max-norm', default=400, type=int, help='Norm cutoff to prevent explosion of gradients')
@@ -43,6 +47,7 @@ parser.add_argument('--visdom', dest='visdom', action='store_true', help='Turn o
 parser.add_argument('--tensorboard', default=True,dest='tensorboard', action='store_true', help='Turn on tensorboard graphing')
 parser.add_argument('--log-dir', default='visualize/w2lOnMozillaDataAftr118Epch', help='Location of tensorboard log')
 parser.add_argument('--log-params', dest='log_params', action='store_true', help='Log parameter values and gradients')
+parser.add_argument('--seed', default=1234 )
 parser.add_argument('--id', default='Wav2Letter training', help='Identifier for visdom/tensorboard run')
 parser.add_argument('--save-folder', default='~/models/wave2Letter', help='Location to save epoch models')
 parser.add_argument('--model-path', default='~/models/wave2Letter/wav2Letter_final.pth.tar',
@@ -150,10 +155,19 @@ def poly_lr_scheduler(init_lr, iter, lr_decay_iter=1,
 
 if __name__ == '__main__':
     args = parser.parse_args()
-    regScale = args.reg_scale
+
+    # Set seeds for determinism
+    torch.manual_seed(args.seed)
+    torch.cuda.manual_seed_all(args.seed)
+    np.random.seed(args.seed)
+    random.seed(args.seed)
+
+    device = torch.device("cuda" if args.cuda else "cpu")
+    if args.mixPrec and not args.cuda:
+        raise ValueError('If using mixed precision training, CUDA must be enabled!')
     args.distributed = args.world_size > 1
     main_proc = True
-    # totalSteps = (float(args.numFiles)//args.batch_size)*args.epochs
+    device = torch.device("cuda" if args.cuda else "cpu")
     if args.distributed:
         if args.gpu_rank:
             torch.cuda.set_device(int(args.gpu_rank))
@@ -161,10 +175,12 @@ if __name__ == '__main__':
                                 world_size=args.world_size, rank=args.rank)
         main_proc = args.rank == 0  # Only the first proc should save models
     save_folder = args.save_folder
+    os.makedirs(save_folder, exist_ok=True)  # Ensure save folder exists
 
     loss_results, cer_results, wer_results = torch.Tensor(args.epochs), torch.Tensor(args.epochs), torch.Tensor(
         args.epochs)
     best_wer = None
+    optim_state = None
     if args.visdom and main_proc:
         from visdom import Visdom
 
@@ -218,17 +234,18 @@ if __name__ == '__main__':
             model = WaveToLetter.setAudioConfKey(model,'noise_min',args.noise_min)
 
         if not args.finetune:  # Don't want to restart training
-            if args.cuda:
-                model.cuda()
-            optimizer.load_state_dict(package['optim_dict'])
+            # if args.cuda:
+            #     model.cuda()
+            optim_state = package['optim_dict']
+            # optimizer.load_state_dict(package['optim_dict'])
 
             # Temporary fix for pytorch #2830 & #1442 while pull request #3658 in not incorporated in a release
             # TODO : remove when a new release of pytorch include pull request #3658
-            if args.cuda:
-                for state in optimizer.state.values():
-                    for k, v in state.items():
-                        if torch.is_tensor(v):
-                            state[k] = v.cuda()
+            # if args.cuda:
+            #     for state in optimizer.state.values():
+            #         for k, v in state.items():
+            #             if torch.is_tensor(v):
+            #                 state[k] = v.cuda()
 
             start_epoch = int(package.get('epoch', 1)) - 1  # Index start at 0 for training
             start_iter = package.get('iteration', None)
@@ -275,10 +292,10 @@ if __name__ == '__main__':
                           noise_levels=(args.noise_min, args.noise_max))
 
         model = WaveToLetter(labels=labels,
-                           audio_conf=audio_conf,sample_rate=args.sample_rate,window_size=args.window_size)
-        parameters = model.parameters()
-        optimizer = torch.optim.SGD(parameters, lr=args.lr,
-                                    momentum=args.momentum, nesterov=True)
+                           audio_conf=audio_conf,sample_rate=args.sample_rate,window_size=args.window_size,mixed_precision=args.mixPrec)
+        # parameters = model.parameters()
+        # optimizer = torch.optim.SGD(parameters, lr=args.lr,
+        #                             momentum=args.momentum, nesterov=True)
 
     decoder = GreedyDecoder(labels)
 
@@ -301,12 +318,21 @@ if __name__ == '__main__':
         print("Shuffling batches for the following epochs")
         train_sampler.shuffle(start_epoch)
 
-    if args.cuda and not args.distributed:
-        model = torch.nn.DataParallel(model).cuda()
-    elif args.cuda and args.distributed:
-        model.cuda()
+    model = model.to(device)
+    parameters = model.parameters()
+    optimizer = torch.optim.SGD(parameters, lr=args.lr,
+                                momentum=args.momentum, nesterov=True, weight_decay=1e-5)
+    if args.distributed:
         model = DistributedDataParallel(model)
-
+    # if args.cuda and not args.distributed:
+    #     model = torch.nn.DataParallel(model).cuda()
+    # elif args.cuda and args.distributed:
+    #     model.cuda()
+    #     model = DistributedDataParallel(model)
+    if optim_state is not None:
+        optimizer.load_state_dict(optim_state)
+    if args.mixPrec:
+        model, optimizer = amp.initialize(model, optimizer, opt_level="O2")
     print(model)
     print("Number of parameters: %d" % WaveToLetter.get_param_size(model))
 
@@ -334,9 +360,9 @@ if __name__ == '__main__':
             inputsMags = Variable(inputsMags, requires_grad=False)
             target_sizes = Variable(target_sizes, requires_grad=False)
             targets = Variable(targets, requires_grad=False)
-
-            if args.cuda:
-                inputsMags = inputsMags.cuda()
+            inputsMags = inputsMags.to(device)
+            # if args.cuda:
+            #     inputsMags = inputsMags.cuda()
                 # targets = targets.cuda()
                 # target_sizes= target_sizes.cuda()
             out = model(inputsMags)
@@ -350,6 +376,7 @@ if __name__ == '__main__':
             loss = loss / inputs.size(0)  # average the loss by minibatch
             loss_sum = loss.data.sum()
             inf = float("inf")
+
             if loss_sum == inf or loss_sum == -inf:
                 print("WARNING: received an inf loss, setting loss value to 0")
                 loss_value = 0
@@ -361,12 +388,17 @@ if __name__ == '__main__':
             losses.update(loss_value, inputs.size(0))
             # compute gradient
             optimizer.zero_grad()
-            loss.backward()
-            torch.nn.utils.clip_grad_norm(model.parameters(), args.max_norm)
+            if args.mixPrec:
+                with amp.scale_loss(loss, optimizer) as scaled_loss:
+                    scaled_loss.backward()
+                optimizer.clip_master_grads(args.max_norm)
+            else:
+                loss.backward()
+                torch.nn.utils.clip_grad_norm_(model.parameters(), args.max_norm)
             # SGD step
             optimizer.step()
-            if args.cuda:
-                torch.cuda.synchronize()
+            # if args.cuda:
+            #     torch.cuda.synchronize()
 
             # measure elapsed time
             batch_time.update(time.time() - end)
@@ -378,11 +410,11 @@ if __name__ == '__main__':
                       'Loss {loss.val:.4f} ({loss.avg:.4f})\t'.format(
                     (epoch + 1), (i + 1), len(train_sampler), batch_time=batch_time,
                     data_time=data_time, loss=losses))
-            if losses.val <0.01:
-                out = out.transpose(0,1)
-                decoded_output, _ = decoder.decode(out.data, sizes)
-                for numFile,idxP in enumerate(decoded_output):
-                    print(idxP),inputFilePaths[numFile][1]
+            # if losses.val <0.01:
+            #     out = out.transpose(0,1)
+            #     decoded_output, _ = decoder.decode(out.data, sizes)
+            #     for numFile,idxP in enumerate(decoded_output):
+            #         print(idxP),inputFilePaths[numFile][1]
             if args.checkpoint_per_batch > 0 and i > 0 and (i + 1) % args.checkpoint_per_batch == 0 and main_proc:
                 file_path = '%s/wav2Letter_checkpoint_epoch_%d_iter_%d.pth.tar' % (save_folder, epoch + 1, i + 1)
                 print("Saving checkpoint model to %s" % file_path)
@@ -406,14 +438,14 @@ if __name__ == '__main__':
         total_cer, total_wer = 0, 0
         model.eval()
         if (epoch+1)%1==0:
-            print "coming into test loop"
+            print ("coming into test loop")
             for i, (data) in tqdm(enumerate(test_loader), total=len(test_loader)):
                 inputs, targets, input_percentages, target_sizes, inputFilePaths, inputsMags = data
                 if not args.pcen:
                     inputsMags = inputs
 
                 inputsMags = Variable(inputsMags, volatile=True)
-
+                inputsMags = inputsMags.to(device)
 
 
                 # unflatten targets
@@ -423,8 +455,8 @@ if __name__ == '__main__':
                     split_targets.append(targets[offset:offset + size])
                     offset += size
 
-                if args.cuda:
-                    inputsMags = inputsMags.cuda()
+                # if args.cuda:
+                #     inputsMags = inputsMags.cuda()
 
                 out = model(inputsMags)  # NxTxH
                 seq_length = out.size(1)
@@ -436,13 +468,13 @@ if __name__ == '__main__':
                 wer, cer = 0, 0
                 for x in range(len(target_strings)):
                     transcript, reference = decoded_output[x][0], target_strings[x][0]
-                    print 'transcript : {}, reference :{} , filePath : {}'.format(transcript,reference,inputFilePaths[x][0])
+                    print ('transcript : {}, reference :{} , filePath : {}'.format(transcript,reference,inputFilePaths[x][0]))
                     # print 'reference : {}'.format(reference)
                     try:
                         wer += decoder.wer(transcript, reference) / float(len(reference.split()))
                         cer += decoder.cer(transcript, reference) / float(len(reference))
-                    except Exception,e:
-                        print 'encountered exception {}'.format(e)
+                    except Exception as e:
+                        print ('encountered exception {}'.format(e))
                 total_cer += cer
                 total_wer += wer
 

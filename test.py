@@ -4,7 +4,7 @@ import numpy as np
 from torch.autograd import Variable
 from tqdm import tqdm
 from decoder import GreedyDecoder
-
+import torch
 from data.data_loader import SpectrogramDataset, AudioDataLoader
 from model import WaveToLetter
 
@@ -36,11 +36,16 @@ beam_args.add_argument('--cutoff-top-n', default=40, type=int,
 beam_args.add_argument('--cutoff-prob', default=1.0, type=float,
                        help='Cutoff probability in pruning,default 1.0, no pruning.')
 beam_args.add_argument('--lm-workers', default=4, type=int, help='Number of LM processes to use')
+parser.add_argument('--mixPrec', default=False,dest='mixPrec', action='store_true', help='Use mix prec for inference even if it was not avail for training.')
+
 parser.add_argument('--usePCEN', default=True,dest='usePcen', action='store_true', help='Use cuda to train model')
 args = parser.parse_args()
 
 if __name__ == '__main__':
+    torch.set_grad_enabled(False)
+    device = torch.device("cuda" if args.cuda else "cpu")
     model = WaveToLetter.load_model(args.model_path, cuda=args.cuda)
+    model = model.to(device)
     model.eval()
     avgTime = []
     labels = WaveToLetter.get_labels(model)
@@ -68,7 +73,8 @@ if __name__ == '__main__':
 
         inputsMags = Variable(inputsMags, volatile=True)
         inputs = Variable(inputs, volatile=True)
-
+        if model.mixed_precision:
+            inputs = inputs.half()
         # unflatten targets
         split_targets = []
         offset = 0
@@ -77,8 +83,8 @@ if __name__ == '__main__':
             offset += size
 
         if args.cuda:
-            inputsMags = inputsMags.cuda()
-            inputs = inputs.cuda()
+            inputs = inputs.to(device)
+            inputsMags = inputsMags.to(device)
         beforeInferenceTime = time.time()
         if args.usePcen:
             out = model(inputsMags)

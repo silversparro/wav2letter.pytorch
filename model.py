@@ -106,7 +106,7 @@ class Cov1dBlock(nn.Module):
         return output
 
 class WaveToLetter(nn.Module):
-    def __init__(self,sample_rate,window_size, labels="abc",audio_conf=None):
+    def __init__(self,sample_rate,window_size, labels="abc",audio_conf=None,mixed_precision=False):
         super(WaveToLetter, self).__init__()
 
         # model metadata needed for serialization/deserialization
@@ -180,7 +180,7 @@ class WaveToLetter(nn.Module):
     def load_model(cls, path, cuda=False):
         package = torch.load(path, map_location=lambda storage, loc: storage)
         model = cls(labels=package['labels'], audio_conf=package['audio_conf'],sample_rate=package["sample_rate"]
-                    ,window_size=package["window_size"])
+                    ,window_size=package["window_size"],mixed_precision=package.get('mixed_precision',False))
         # the blacklist parameters are params that were previous erroneously saved by the model
         # care should be taken in future versions that if batch_norm on the first rnn is required
         # that it be named something else
@@ -205,7 +205,7 @@ class WaveToLetter(nn.Module):
     @classmethod
     def load_model_package(cls, package, cuda=False):
         model = cls(labels=package['labels'], audio_conf=package['audio_conf'],sample_rate=package["sample_rate"]
-                    ,window_size=package["window_size"])
+                    ,window_size=package["window_size"],mixed_precision=package.get('mixed_precision',False))
         model.load_state_dict(package['state_dict'])
         if cuda:
             model = torch.nn.DataParallel(model).cuda()
@@ -220,7 +220,8 @@ class WaveToLetter(nn.Module):
             'version': model._version,
             'audio_conf': model._audio_conf,
             'labels': model._labels,
-            'state_dict': model.state_dict()
+            'state_dict': model.state_dict(),
+            'mixed_precision': model.mixed_precision
         }
         if optimizer is not None:
             package['optim_dict'] = optimizer.state_dict()
