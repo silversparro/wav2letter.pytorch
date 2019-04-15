@@ -3,9 +3,8 @@
 Implementation of Wav2Letter using [Baidu Warp-CTC](https://github.com/baidu-research/warp-ctc).
 Creates a network based on the [Wav2Letter](https://arxiv.org/abs/1609.03193) architecture, trained with the CTC activation function.
 
-Currently Tested on pytorch [0.4.1] with cuda10 and python2.7.
+Currently Tested on pytorch [1] with cuda10 and python3.7.
 
-python3.7 version releasing soon.
 
 ## Features
 
