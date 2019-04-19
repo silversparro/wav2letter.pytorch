@@ -28,7 +28,6 @@ class stft(nn.Module):
         magn = self.conv(sample)
 
         magn = magn.permute(0, 2, 1, 3)
-        magn = magn[:,:,1:,:]
         return magn
 
 
@@ -167,7 +166,7 @@ class WaveToLetter(nn.Module):
         self.mixed_precision=mixed_precision
 
         nfft = (self._sample_rate * self._window_size)
-        input_size = int((nfft/2))
+        input_size = 1+int((nfft/2))
         hop_length = sample_rate * self._audio_conf.get("window_stride", 0.01)
 
         # self.pcen = PCEN()
