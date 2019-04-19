@@ -5,6 +5,8 @@ Creates a network based on the [Wav2Letter](https://arxiv.org/abs/1609.03193) ar
 
 Currently Tested on pytorch [1] with cuda10 and python3.7.
 
+Branch trainableFrontEnd : contains the code in progress to train the model using the raw audio samples only.
+       python27 : contains the same code as of master but for python2.7 and pytorch0.4.1
 
 ## Features
 
