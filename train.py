@@ -33,7 +33,6 @@ parser.add_argument('--window-stride', default=.01, type=float, help='Window str
 parser.add_argument('--window', default='hamming', help='Window type for spectrogram generation')
 parser.add_argument('--epochs', default=200, type=int, help='Number of training epochs')
 parser.add_argument('--cuda', default=True,dest='cuda', action='store_true', help='Use cuda to train model')
-parser.add_argument('--usePcen', default=True,dest='pcen', action='store_true', help='Use pcen features')
 parser.add_argument('--lr', '--learning-rate', default=1e-5, type=float, help='initial learning rate')
 parser.add_argument('--mixPrec',dest='mixPrec',default=False,action='store_true', help='use mix precision for training')
 parser.add_argument('--reg-scale', dest='reg_scale', default=0.9, type=float, help='L2 regularizationScale')
@@ -353,19 +352,13 @@ if __name__ == '__main__':
                 break
             inputs, targets, input_percentages, target_sizes, inputFilePaths, inputsMags = data
             globalStep +=1
-            if not args.pcen:
-                inputsMags = inputs
             # measure data loading time
             data_time.update(time.time() - end)
-            inputsMags = Variable(inputsMags, requires_grad=False)
+            inputs = Variable(inputs, requires_grad=False)
             target_sizes = Variable(target_sizes, requires_grad=False)
             targets = Variable(targets, requires_grad=False)
-            inputsMags = inputsMags.to(device)
-            # if args.cuda:
-            #     inputsMags = inputsMags.cuda()
-                # targets = targets.cuda()
-                # target_sizes= target_sizes.cuda()
-            out = model(inputsMags)
+            inputs = inputs.to(device)
+            out = model(inputs)
             out = out.transpose(0, 1)  # TxNxH
 
             seq_length = out.size(0)
@@ -441,11 +434,9 @@ if __name__ == '__main__':
             print ("coming into test loop")
             for i, (data) in tqdm(enumerate(test_loader), total=len(test_loader)):
                 inputs, targets, input_percentages, target_sizes, inputFilePaths, inputsMags = data
-                if not args.pcen:
-                    inputsMags = inputs
 
-                inputsMags = Variable(inputsMags, volatile=True)
-                inputsMags = inputsMags.to(device)
+                inputs = Variable(inputs, volatile=True)
+                inputs = inputs.to(device)
 
 
                 # unflatten targets
@@ -458,7 +449,7 @@ if __name__ == '__main__':
                 # if args.cuda:
                 #     inputsMags = inputsMags.cuda()
 
-                out = model(inputsMags)  # NxTxH
+                out = model(inputs)  # NxTxH
                 seq_length = out.size(1)
                 sizes = input_percentages.mul_(int(seq_length)).int()
 
