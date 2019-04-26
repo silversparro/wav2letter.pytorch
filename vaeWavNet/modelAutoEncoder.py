@@ -5,6 +5,7 @@ import scipy.signal
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from torch import distributions as dist
 from torch.autograd import Variable
 from wavenet import WaveNet
 from torch.nn.parameter import Parameter
