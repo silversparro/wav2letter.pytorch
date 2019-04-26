@@ -10,6 +10,17 @@ from torch.autograd import Variable
 from wavenet import WaveNet
 from torch.nn.parameter import Parameter
 
+class Loss(nn.Module):
+    def __init__(self):
+        super(Loss, self).__init__()
+        self.mse_loss = nn.MSELoss(reduction="sum")
+
+    def forward(self, recon_x, x, mu, logvar):
+        MSE = self.mse_loss(recon_x, x)
+        KLD = -0.5 * torch.sum(1 + logvar - mu.pow(2)-logvar.exp())
+
+        return MSE + KLD
+
 class VAE(nn.Module):
     def __init__(self, n_in, n_out, n_sam_per_datapoint=1, bias=True):
         '''n_sam_per_datapoint is L from equation 7,
@@ -45,7 +56,6 @@ class VAE(nn.Module):
         self.mu, self.sigma = mu, sigma
 
         return samples
-
 
 class Jitter(nn.Module):
     '''Time-jitter regularization.  With probability [p, (1-2p), p], replace
@@ -143,7 +153,7 @@ class VAEImpl(nn.Module):
 
     def forward(self, x):
 
-        fc1 = self.relu(self.fc_bn1(self.fc1(x)))
+        fc1 = F.relu(self.fc_bn1(self.fc1(x)))
 
         mu = self.fc21(fc1)
         std = self.fc22(fc1)
@@ -152,7 +162,7 @@ class VAEImpl(nn.Module):
         eps = Variable(std.data.new(std.size()).normal_())
         hiddenRepr = eps.mul(std).add_(mu)
 
-        return hiddenRepr
+        return hiddenRepr,mu,std
 
 class stft(nn.Module):
     def __init__(self, nfft=1024, hop_length=512, window="hanning"):
@@ -223,15 +233,21 @@ class ConEncoder(nn.Module):
         )
         self.batchNorm = nn.BatchNorm1d(num_features=output_size,momentum=0.90,eps=0.001) if bn else None
         self.drop_out_layer = nn.Dropout(drop_out_prob) if self.drop_out_prob != -1 else None
-
+        self.paddingAdded = nn.ReflectionPad1d(1) if (residual and kernal_size==3) else None
     def forward(self, xs, hid=None):
         output = self.conv1(xs)
         if self.batchNorm is not None:
             output = self.batchNorm(output)
         if self.activationUse:
             output = torch.clamp(input=output,min=0,max=20)
-        if self.residual:
-            output = xs+output
+        if self.paddingAdded is not None:
+            output = self.paddingAdded(output)
+        try:
+            if self.residual:
+                output = xs+output
+        except Exception as e:
+            print (e)
+
         if self.drop_out_layer is not None:
             output = self.drop_out_layer(output)
 
@@ -260,25 +276,26 @@ class AutoEncoder(nn.Module):
         self.frontEnd = stft(hop_length=int(hop_length), nfft=int(nfft))
         conv1ds = []
 
-        for idx,kernal_size,stride,residual in enumerate(zip(kernal,strides,stack_residual)):
+        for idx,(kernal_size,stride,residual) in enumerate(zip(kernal,strides,stack_residual)):
 
-            convTemp = ConEncoder(input_size=input_size,output_size=768,kernal_size=(kernal_size,),stride=stride,drop_out_prob=0.2,residual=residual)
+            convTemp = ConEncoder(input_size=input_size,output_size=768,kernal_size=(kernal_size,),stride=stride,residual=residual)
+            input_size=768
             conv1ds.append(('encoder_conv1d_{}'.format(idx),convTemp))
 
         self.conv1ds = nn.Sequential(OrderedDict(conv1ds))
         self.bottleNeck = VAEImpl(768,64)
         self.jitter = Jitter(0.12)
-        self.decoder = WaveNet(num_time_samples=2,num_channels=64,num_blocks=2,num_layers=10,num_hidden=10)
+        self.decoder = WaveNet(num_time_samples=10,num_channels=128,num_blocks=2,num_layers=2,num_hidden=128)
 
     def forward(self, x):
         x = self.frontEnd(x)
         x = x.squeeze(1)
         x = self.conv1ds(x)
-        x = self.bottleNeck(x)
+        x,mu,std = self.bottleNeck(x)
         x = self.jitter(x)
         x = self.decoder(x)
         x = x.transpose(1,2)
-        return x
+        return x,mu,std
 
     @classmethod
     def load_model(cls, path, cuda=False):
