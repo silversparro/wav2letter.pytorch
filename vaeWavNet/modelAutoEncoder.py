@@ -233,15 +233,16 @@ class ConEncoder(nn.Module):
         )
         self.batchNorm = nn.BatchNorm1d(num_features=output_size,momentum=0.90,eps=0.001) if bn else None
         self.drop_out_layer = nn.Dropout(drop_out_prob) if self.drop_out_prob != -1 else None
-        self.paddingAdded = nn.ReflectionPad1d(1) if (residual and kernal_size==3) else None
+        self.paddingAdded = nn.ReflectionPad1d(1) if residual else None
     def forward(self, xs, hid=None):
         output = self.conv1(xs)
         if self.batchNorm is not None:
             output = self.batchNorm(output)
         if self.activationUse:
             output = torch.clamp(input=output,min=0,max=20)
-        if self.paddingAdded is not None:
-            output = self.paddingAdded(output)
+        if self.residual :
+            if self.kernal_size[0] == 3:
+                output = self.paddingAdded(output)
         try:
             if self.residual:
                 output = xs+output
@@ -285,7 +286,7 @@ class AutoEncoder(nn.Module):
         self.conv1ds = nn.Sequential(OrderedDict(conv1ds))
         self.bottleNeck = VAEImpl(768,64)
         self.jitter = Jitter(0.12)
-        self.decoder = WaveNet(num_time_samples=10,num_channels=128,num_blocks=2,num_layers=2,num_hidden=128)
+        self.decoder = WaveNet(num_time_samples=8000,num_channels=128,num_blocks=2,num_layers=10,num_hidden=128)
 
     def forward(self, x):
         x = self.frontEnd(x)
