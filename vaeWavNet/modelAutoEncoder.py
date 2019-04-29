@@ -7,18 +7,32 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch import distributions as dist
 from torch.autograd import Variable
-from wavenet import WaveNet
-from torch.nn.parameter import Parameter
+from wavenet_model import WaveNetModel
+
+def mu_encode_torch(x, n_quanta):
+    '''mu-law encode and quantize'''
+    mu = torch.tensor(float(n_quanta - 1), device=x.device)
+    amp = torch.sign(x) * torch.log1p(mu * torch.abs(x)) / torch.log1p(mu)
+    quant = (amp + 1) * 0.5 * mu + 0.5
+    return quant.round_().to(dtype=torch.long)
 
 class Loss(nn.Module):
     def __init__(self):
         super(Loss, self).__init__()
         self.mse_loss = nn.MSELoss(reduction="sum")
 
-    def forward(self, recon_x, x, mu, logvar):
-        MSE = self.mse_loss(recon_x, x)
-        KLD = -0.5 * torch.sum(1 + logvar - mu.pow(2)-logvar.exp())
+    def forward(self, recon_x, x, mu, sigma):
 
+        reconShape = recon_x.size()
+        inputShape = x.size()
+        if inputShape[-1] > reconShape[-1]:
+            reshapedRecon = torch.zeros(inputShape[0], inputShape[1], inputShape[2])
+            reshapedRecon[:,:,:reconShape[2]] = recon_x
+            recon_x = reshapedRecon
+            del reshapedRecon
+            recon_x = recon_x.cuda()
+        MSE = self.mse_loss(recon_x, x)
+        KLD = -0.5 * torch.sum(1 + sigma - mu.pow(2)-sigma.exp())
         return MSE + KLD
 
 class VAE(nn.Module):
@@ -286,16 +300,26 @@ class AutoEncoder(nn.Module):
         self.conv1ds = nn.Sequential(OrderedDict(conv1ds))
         self.bottleNeck = VAEImpl(768,64)
         self.jitter = Jitter(0.12)
-        self.decoder = WaveNet(num_time_samples=8000,num_channels=128,num_blocks=2,num_layers=10,num_hidden=128)
+        # self.decoder = WaveNet(num_time_samples=2048,num_channels=128,num_blocks=2,num_layers=10,num_hidden=128)
+        # self.decoder = FastWaveNet()
+        self.decoder = WaveNetModel()
 
     def forward(self, x):
+        orignalSize = x.size()
         x = self.frontEnd(x)
         x = x.squeeze(1)
         x = self.conv1ds(x)
         x,mu,std = self.bottleNeck(x)
-        x = self.jitter(x)
+        # x = self.jitter(x)
+        # x = x.unsqueeze(1)
+        inpsize = x.size()
+        x = x.view(inpsize[0],1,inpsize[1]*inpsize[2])
         x = self.decoder(x)
-        x = x.transpose(1,2)
+        # x = x.view(inpsize[0],1,inpsize[1],inpsize[2])
+
+        # x = x.transpose(1,2)
+        # x = x[:, :, :orignalSize[-1]]
+        # x = x.contiguous()
         return x,mu,std
 
     @classmethod

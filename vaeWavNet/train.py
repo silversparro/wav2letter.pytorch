@@ -365,7 +365,7 @@ if __name__ == '__main__':
                 print("WARNING: received an inf loss, setting loss value to 0")
                 loss_value = 0
             else:
-                loss_value = loss.data[0]
+                loss_value = loss.data.item()
 
 
             avg_loss += loss_value
@@ -396,7 +396,7 @@ if __name__ == '__main__':
                     data_time=data_time, loss=losses))
             # if losses.val <0.01:
             #     out = out.transpose(0,1)
-            #     decoded_output, _ = decoder.decode(out.data, sizes)
+            #     decoded_output, _ = decoderAE.decode(out.data, sizes)
             #     for numFile,idxP in enumerate(decoded_output):
             #         print(idxP),inputFilePaths[numFile][1]
             if args.checkpoint_per_batch > 0 and i > 0 and (i + 1) % args.checkpoint_per_batch == 0 and main_proc:
