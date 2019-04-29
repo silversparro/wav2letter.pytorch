@@ -315,11 +315,6 @@ class AutoEncoder(nn.Module):
         inpsize = x.size()
         x = x.view(inpsize[0],1,inpsize[1]*inpsize[2])
         x = self.decoder(x)
-        # x = x.view(inpsize[0],1,inpsize[1],inpsize[2])
-
-        # x = x.transpose(1,2)
-        # x = x[:, :, :orignalSize[-1]]
-        # x = x.contiguous()
         return x,mu,std
 
     @classmethod

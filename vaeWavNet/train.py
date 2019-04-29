@@ -214,7 +214,7 @@ if __name__ == '__main__':
             raise
     criterion = Loss()
 
-    avg_loss, start_epoch, start_iter = 0, 0, 0
+    avg_loss, start_epoch, start_iter, avg_validation_loss = 0, 0, 0,0
     if args.continue_from:  # Starting from previous model
         print("Loading checkpoint model %s" % args.continue_from)
         package = torch.load(args.continue_from, map_location=lambda storage, loc: storage)
@@ -301,8 +301,11 @@ if __name__ == '__main__':
 
     if not args.distributed:
         train_sampler = BucketingSampler(train_dataset, batch_size=args.batch_size)
+        test_sampler = BucketingSampler(test_dataset, batch_size=args.batch_size)
     else:
         train_sampler = DistributedBucketingSampler(train_dataset, batch_size=args.batch_size,
+                                                    num_replicas=args.world_size, rank=args.rank)
+        test_sampler = DistributedBucketingSampler(test_dataset, batch_size=args.batch_size,
                                                     num_replicas=args.world_size, rank=args.rank)
     train_loader = AudioDataLoader(train_dataset,
                                    num_workers=args.num_workers, batch_sampler=train_sampler)
@@ -332,8 +335,11 @@ if __name__ == '__main__':
     print("Number of parameters: %d" % AutoEncoder.get_param_size(model))
 
     batch_time = AverageMeter()
+    batch_time_validation = AverageMeter()
     data_time = AverageMeter()
+    data_time_validation = AverageMeter()
     losses = AverageMeter()
+    validationLoss = AverageMeter()
     globalStep = 0
     for epoch in range(start_epoch, args.epochs):
         torch.cuda.empty_cache()
@@ -421,50 +427,43 @@ if __name__ == '__main__':
         start_iter = 0  # Reset start iteration for next epoch
         total_cer, total_wer = 0, 0
         model.eval()
+        end = time.time()
         if (epoch+1)%1==0:
             print ("coming into test loop")
             for i, (data) in tqdm(enumerate(test_loader), total=len(test_loader)):
                 inputs, targets, input_percentages, target_sizes, inputFilePaths, inputsMags = data
-
+                data_time_validation.update(time.time() - end)
                 inputs = Variable(inputs, volatile=True)
                 inputs = inputs.to(device)
 
+                outValidation, muValidation, stdValidation = model(inputs)
+                loss = criterion(outValidation, inputs, muValidation, stdValidation)
+                loss = loss / inputs.size(0)  # average the loss by minibatch
+                loss_sum = loss.data.sum()
+                inf = float("inf")
 
-                # unflatten targets
-                split_targets = []
-                offset = 0
-                for size in target_sizes:
-                    split_targets.append(targets[offset:offset + size])
-                    offset += size
+                if loss_sum == inf or loss_sum == -inf:
+                    print("WARNING: received an inf loss, setting loss value to 0")
+                    loss_value = 0
+                else:
+                    loss_value = loss.data.item()
 
-                # if args.cuda:
-                #     inputsMags = inputsMags.cuda()
-
-                out = model(inputs)  # NxTxH
-                seq_length = out.size(1)
-                sizes = input_percentages.mul_(int(seq_length)).int()
-
-                decoded_output, _ = decoder.decode(out.data, sizes)
-                target_strings = decoder.convert_to_strings(split_targets)
-
-                wer, cer = 0, 0
-                for x in range(len(target_strings)):
-                    transcript, reference = decoded_output[x][0], target_strings[x][0]
-                    print ('transcript : {}, reference :{} , filePath : {}'.format(transcript,reference,inputFilePaths[x][0]))
-                    # print 'reference : {}'.format(reference)
-                    try:
-                        wer += decoder.wer(transcript, reference) / float(len(reference.split()))
-                        cer += decoder.cer(transcript, reference) / float(len(reference))
-                    except Exception as e:
-                        print ('encountered exception {}'.format(e))
-                total_cer += cer
-                total_wer += wer
-
+                avg_validation_loss += loss_value
+                validationLoss.update(loss_value, inputs.size(0))
+                batch_time_validation.update(time.time() - end)
+                end = time.time()
                 if args.cuda:
                     torch.cuda.synchronize()
-                del out
+                del outValidation
                 torch.cuda.empty_cache()
-        wer = total_wer / len(test_loader.dataset)
+                # if not args.silent:
+                #     print('Epoch: [{0}][{1}/{2}]\t'
+                #           'Time {batch_time.val:.3f} ({batch_time.avg:.3f})\t'
+                #           'Data {data_time.val:.3f} ({data_time.avg:.3f})\t'
+                #           'Loss {loss.val:.4f} ({loss.avg:.4f})\t'.format(
+                #         (epoch + 1), (i + 1), len(test_sampler), batch_time=batch_time_validation,
+                #         data_time=data_time_validation, loss=validationLoss))
+        wer = validationLoss.avg
         cer = total_cer / len(test_loader.dataset)
         wer *= 100
         cer *= 100
@@ -472,9 +471,8 @@ if __name__ == '__main__':
         wer_results[epoch] = wer
         cer_results[epoch] = cer
         print('Validation Summary Epoch: [{0}]\t'
-              'Average WER {wer:.3f}\t'
-              'Average CER {cer:.3f}\t'.format(
-            epoch + 1, wer=wer, cer=cer))
+              'Average WER {wer:.3f}\t'.format(
+            epoch + 1, wer=wer))
 
         if args.visdom and main_proc:
             x_axis = epochs[0:epoch + 1]
@@ -506,7 +504,7 @@ if __name__ == '__main__':
                     tensorboard_writer.add_histogram(tag + '/grad', to_np(value.grad), epoch + 1)
         if args.checkpoint and main_proc:
             file_path = '%s/wav2Letter_%d.pth.tar' % (save_folder, epoch + 1)
-            torch.save(WaveToLetter.serialize(model, optimizer=optimizer, epoch=epoch, loss_results=loss_results,
+            torch.save(AutoEncoder.serialize(model, optimizer=optimizer, epoch=epoch, loss_results=loss_results,
                                             wer_results=wer_results, cer_results=cer_results),
                        file_path)
         if (epoch + 1) % 1 == 0:
@@ -522,7 +520,7 @@ if __name__ == '__main__':
         # if (best_wer is None or best_wer > wer) and main_proc:
         if main_proc:
             # print("Found better validated model, saving to %s" % args.model_path)
-            torch.save(WaveToLetter.serialize(model, optimizer=optimizer, epoch=epoch, loss_results=loss_results,
+            torch.save(AutoEncoder.serialize(model, optimizer=optimizer, epoch=epoch, loss_results=loss_results,
                                             wer_results=wer_results, cer_results=cer_results)
                        , args.model_path)
 

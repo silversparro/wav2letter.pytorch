@@ -187,14 +187,6 @@ class WaveNetModel(nn.Module):
     def forward(self, input):
         x = self.wavenet(input,
                          dilation_func=self.wavenet_dilate)
-        # x = x.unsqueeze(1)
-        # dx = self.decomposeVector(x)
-        # reshape output
-        # [n, c, l] = x.size()
-        # l = self.output_length
-        # x = x[:, :, -l:]
-        # x = x.transpose(1, 2).contiguous()
-        # x = x.view(n * l, c)
         return x
 
     def generate(self,
