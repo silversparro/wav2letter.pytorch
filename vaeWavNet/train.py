@@ -16,6 +16,7 @@ from data.distributed import DistributedDataParallel
 from decoder import GreedyDecoder
 from modelAutoEncoder import AutoEncoder,Loss
 import Levenshtein as Lev
+import scipy.io.wavfile
 
 parser = argparse.ArgumentParser(description='Wav2Letter training')
 parser.add_argument('--train-manifest', metavar='DIR',
@@ -23,6 +24,7 @@ parser.add_argument('--train-manifest', metavar='DIR',
 parser.add_argument('--val-manifest', metavar='DIR',
                     help='path to validation manifest csv', default='~/data/validation.csv')
 parser.add_argument('--sample-rate', default=16000, type=int, help='Sample rate')
+parser.add_argument('--save-audio',dest='saveDir', default='/media/yoda/gargantua/data_pb/data/autoEncoderOutput', help='path to save re-constructed audio')
 parser.add_argument('--batch-size', default=16, type=int, help='Batch size for training')
 parser.add_argument('--num-workers', default=0, type=int, help='Number of workers used in data-loading')
 parser.add_argument('--labels-path', default='labels.json', help='Contains all characters for transcription')
@@ -341,6 +343,7 @@ if __name__ == '__main__':
     losses = AverageMeter()
     validationLoss = AverageMeter()
     globalStep = 0
+    validationResultSaveDir = args.saveDir
     for epoch in range(start_epoch, args.epochs):
         torch.cuda.empty_cache()
         if not args.no_shuffle:
@@ -428,6 +431,11 @@ if __name__ == '__main__':
         total_cer, total_wer = 0, 0
         model.eval()
         end = time.time()
+        savDirForEpoch = validationResultSaveDir + '/{}'.format(epoch+1)
+
+        if not os.path.exists(savDirForEpoch):
+            os.makedirs(savDirForEpoch)
+
         if (epoch+1)%1==0:
             print ("coming into test loop")
             for i, (data) in tqdm(enumerate(test_loader), total=len(test_loader)):
@@ -454,15 +462,18 @@ if __name__ == '__main__':
                 end = time.time()
                 if args.cuda:
                     torch.cuda.synchronize()
-                del outValidation
+
                 torch.cuda.empty_cache()
-                # if not args.silent:
-                #     print('Epoch: [{0}][{1}/{2}]\t'
-                #           'Time {batch_time.val:.3f} ({batch_time.avg:.3f})\t'
-                #           'Data {data_time.val:.3f} ({data_time.avg:.3f})\t'
-                #           'Loss {loss.val:.4f} ({loss.avg:.4f})\t'.format(
-                #         (epoch + 1), (i + 1), len(test_sampler), batch_time=batch_time_validation,
-                #         data_time=data_time_validation, loss=validationLoss))
+
+                for idxAudioSave in range(len(inputFilePaths)):
+                    fileNameOfAudio = inputFilePaths[idxAudioSave][0].split('/')[-1]
+                    audioSaveFolder = savDirForEpoch+'/'+fileNameOfAudio
+                    orignalAudio = inputs[idxAudioSave].cpu().numpy().squeeze(0)
+                    reconAudio = outValidation[idxAudioSave].cpu().detach().numpy().squeeze(0)
+                    os.makedirs(audioSaveFolder)
+                    scipy.io.wavfile.write(audioSaveFolder+'/src.wav', 8000, orignalAudio)
+                    scipy.io.wavfile.write(audioSaveFolder+'/recon.wav', 8000, reconAudio)
+                del outValidation
         wer = validationLoss.avg
         cer = total_cer / len(test_loader.dataset)
         wer *= 100
