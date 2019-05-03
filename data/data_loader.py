@@ -284,7 +284,7 @@ def _collate_fn(batch):
         # tensorMagShape = tensorMag.shape
         # tensorNew = np.pad(tensor,((0,0),(0,abs(tensorShape[1]-max_seqlength))),'wrap')
         tensorNew = np.pad(tensor, (0,abs(tensorShape[0]-max_seqlength)), 'constant', constant_values=(0))
-        inputs[x][0].copy_(torch.FloatTensor(tensorNew))
+        inputs[x][0].copy_(torch.DoubleTensor(tensorNew))
         if tensorMag is not None:
             tensorMagNew = np.pad(tensorMag,((0,0),(0,abs(tensorShape[1]-max_seqlength))),'wrap')
             inputsMags[x][0].narrow(1, 0, max_seqlength).copy_(torch.FloatTensor(tensorMagNew))

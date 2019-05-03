@@ -2,7 +2,7 @@ import os
 import os.path
 import time
 from wavenet_modules import *
-
+import torch
 
 class WaveNetModel(nn.Module):
     """
@@ -120,7 +120,6 @@ class WaveNetModel(nn.Module):
         # self.output_length = 2 ** (layers - 1)
         self.output_length = output_length
         self.receptive_field = receptive_field
-        self.decomposeVector = nn.Conv2d(in_channels=1,out_channels=128,kernel_size=1)
     def wavenet(self, input, dilation_func):
         # inputUnsqueezed = input.unsqueeze(1)
         # sizes = input.size()
@@ -187,7 +186,24 @@ class WaveNetModel(nn.Module):
     def forward(self, input):
         x = self.wavenet(input,
                          dilation_func=self.wavenet_dilate)
+
+        batchSize ,_,temp1 = x.size()
+        x = self.generateAudio(x)
+        # x = torch.cuda.DoubleTensor(x)
+        # x2 = torch.zeros(batchSize, 1, temp1)
+        # for idx in range(batchSize):
+        #     outputTemp = x[idx].squeeze(0)
+        #     audioGen = self.generateAudio(outputTemp)
+        #     x[idx][0] = audioGen
+            # x2[idx,1,:] = audioGen
+        # x = x2
         return x
+
+    def generateAudio(self,wavNetOutput):
+
+        generated = (wavNetOutput / self.classes) * 2. - 1
+        mu_gen = mu_law_expansion(generated, self.classes)
+        return mu_gen
 
     def generate(self,
                  num_samples,
@@ -329,7 +345,8 @@ def mu_law_encoding(data, mu):
 
 
 def mu_law_expansion(data, mu):
-    s = np.sign(data) * (np.exp(np.abs(data) * np.log(mu + 1)) - 1) / mu
+    muTensor = torch.cuda.FloatTensor([mu+1])
+    s = torch.sign(data) * (torch.exp(torch.abs(data) * torch.log(muTensor)) - 1) / mu
     return s
 
 def load_latest_model_from(location, use_cuda=True):

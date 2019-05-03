@@ -4,7 +4,7 @@ import json
 import os
 import random
 import time
-
+from PIL import Image
 import numpy as np
 import torch.distributed as dist
 import torch.utils.data.distributed
@@ -363,14 +363,15 @@ if __name__ == '__main__':
             target_sizes = Variable(target_sizes, requires_grad=False)
             targets = Variable(targets, requires_grad=False)
             inputs = inputs.to(device)
-            out,mu,std = model(inputs)  # TxNxH
+            out,mu,std,frontEndAudio,frontEndDecoded = model(inputs)  # TxNxH
 
-            loss = criterion(out, inputs, mu, std)
-            loss = loss / inputs.size(0)  # average the loss by minibatch
-            loss_sum = loss.data.sum()
+            # outRecon = model.generateAudio(outRecon)
+            loss = criterion(frontEndDecoded, frontEndAudio, mu, std)
+            # loss = loss / inputs.size(0)  # average the loss by minibatch
+            # loss_sum = loss.data.sum()
             inf = float("inf")
 
-            if loss_sum == inf or loss_sum == -inf:
+            if loss.data.item() == inf or loss.data.item() == -inf:
                 print("WARNING: received an inf loss, setting loss value to 0")
                 loss_value = 0
             else:
@@ -444,8 +445,8 @@ if __name__ == '__main__':
                 inputs = Variable(inputs, volatile=True)
                 inputs = inputs.to(device)
 
-                outValidation, muValidation, stdValidation = model(inputs)
-                loss = criterion(outValidation, inputs, muValidation, stdValidation)
+                outValidation, muValidation, stdValidation,frontEndAudio,frontEndDecoded = model(inputs)
+                loss = criterion(frontEndDecoded, frontEndAudio, muValidation, stdValidation)
                 loss = loss / inputs.size(0)  # average the loss by minibatch
                 loss_sum = loss.data.sum()
                 inf = float("inf")
@@ -467,12 +468,16 @@ if __name__ == '__main__':
 
                 for idxAudioSave in range(len(inputFilePaths)):
                     fileNameOfAudio = inputFilePaths[idxAudioSave][0].split('/')[-1]
-                    audioSaveFolder = savDirForEpoch+'/'+fileNameOfAudio
+                    audioSaveFolder = savDirForEpoch+'/loss_{}'.format(loss_value)+'/'+fileNameOfAudio
                     orignalAudio = inputs[idxAudioSave].cpu().numpy().squeeze(0)
                     reconAudio = outValidation[idxAudioSave].cpu().detach().numpy().squeeze(0)
+                    audioSpect = frontEndAudio[idxAudioSave].cpu().detach().numpy().squeeze(0)
+                    outSpect = frontEndDecoded[idxAudioSave].cpu().detach().numpy().squeeze(0)
                     os.makedirs(audioSaveFolder)
                     scipy.io.wavfile.write(audioSaveFolder+'/src.wav', 8000, orignalAudio)
                     scipy.io.wavfile.write(audioSaveFolder+'/recon.wav', 8000, reconAudio)
+                    Image.fromarray(audioSpect).convert('RGB').save(audioSaveFolder+'/audio.png')
+                    Image.fromarray(outSpect).convert('RGB').save(audioSaveFolder+'/prediccted.png')
                 del outValidation
         wer = validationLoss.avg
         cer = total_cer / len(test_loader.dataset)
