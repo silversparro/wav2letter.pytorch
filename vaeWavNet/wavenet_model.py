@@ -187,8 +187,8 @@ class WaveNetModel(nn.Module):
         x = self.wavenet(input,
                          dilation_func=self.wavenet_dilate)
 
-        batchSize ,_,temp1 = x.size()
-        x = self.generateAudio(x)
+        # batchSize ,_,temp1 = x.size()
+        # x = self.generateAudio(x)
         # x = torch.cuda.DoubleTensor(x)
         # x2 = torch.zeros(batchSize, 1, temp1)
         # for idx in range(batchSize):

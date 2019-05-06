@@ -201,7 +201,8 @@ class stft(nn.Module):
         self.conv = nn.Sequential(
             nn.Conv2d(1, self.real_kernels_size[0], kernel_size=(self.real_kernels_size[2], self.real_kernels_size[3]), stride=(self.hop_length)),
             nn.BatchNorm2d(self.real_kernels_size[0]),
-            nn.Hardtanh(0, 20, inplace=True)
+            nn.ReLU()
+            # nn.Hardtanh(0, 20, inplace=True)
         )
     def forward(self, sample):
         sample = sample.unsqueeze(1)
@@ -263,8 +264,7 @@ class ConEncoder(nn.Module):
         if self.batchNorm is not None:
             output = self.batchNorm(output)
         if self.activationUse:
-            # output = torch.clamp(input=output,min=0,max=20)
-            output = F.relu(input=output)
+            output = torch.clamp(input=output,min=0,max=20)
         if self.residual :
             if self.kernal_size[0] == 3:
                 output = self.paddingAdded(output)
