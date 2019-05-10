@@ -19,29 +19,22 @@ def mu_encode_torch(x, n_quanta):
 class Loss(nn.Module):
     def __init__(self):
         super(Loss, self).__init__()
-        self.mse_loss = nn.CrossEntropyLoss() #TODO TRY THIS CONFIG AS IT IS
-        self.softMax = nn.Softmax(dim=2)
+        self.mse_loss = nn.MSELoss(reduction="sum")
+
     def forward(self, recon_x, x, mu, sigma):
 
-        # reconShape = recon_x.size()
-        # inputShape = x.size()
-        recon_x = recon_x.transpose(2,3).squeeze(1)
-        x = x.transpose(2,3).squeeze(1)
-        xVar  = Variable(x, requires_grad=False)
-        xSoftMax = self.softMax(xVar)[:,0,:]
-        # if inputShape[-1] > reconShape[-1]:
-        #     #zero padding doesnot help in loss reduction
-        #     # reshapedRecon = torch.zeros(inputShape[0], inputShape[1], inputShape[2])
-        #     # reshapedRecon[:,:,:reconShape[2]] = recon_x
-        #     # recon_x = reshapedRecon
-        #     #
-        #     # del reshapedRecon
-        #     # recon_x = recon_x.cuda()
-        #     difference = abs(inputShape[-1] - reconShape[-1])
-        #     MSE = self.mse_loss(torch.abs(recon_x.squeeze(1)), torch.abs(x[:,:,difference:].squeeze(1)))
-        # else:
-        #     MSE = self.mse_loss(recon_x, x)
-        MSE = self.mse_loss(recon_x,xSoftMax.type(torch.cuda.LongTensor))
+        recon_x = recon_x.squeeze(1)
+        x =x.squeeze(1)
+        reconShape = recon_x.size()
+        inputShape = x.size()
+        if inputShape[-1] > reconShape[-1]:
+            x = x[:,:,:reconShape[2]]
+            # reshapedRecon = torch.zeros(inputShape[0], inputShape[1], inputShape[2])
+            # reshapedRecon[:,:,:reconShape[2]] = recon_x
+            # recon_x = reshapedRecon
+            # del reshapedRecon
+            # recon_x = recon_x.cuda()
+        MSE = self.mse_loss(recon_x.cuda(), x)
         KLD = -0.5 * torch.sum(1 + sigma - mu.pow(2)-sigma.exp())
         return MSE + KLD
 
@@ -318,8 +311,8 @@ class AutoEncoder(nn.Module):
 
     def forward(self, x):
         # orignalSize = x.size()
-        xFrontEnd = self.frontEnd(x)
-        xDecodedAudio = xFrontEnd.squeeze(1)
+        # xFrontEnd = self.frontEnd(x)
+        xDecodedAudio = x.squeeze(1)
         xDecodedAudio = self.conv1ds(xDecodedAudio)
         xDecodedAudio,mu,std = self.bottleNeck(xDecodedAudio)
         # x = self.jitter(x)
@@ -327,8 +320,8 @@ class AutoEncoder(nn.Module):
         inpsize = xDecodedAudio.size()
         xDecodedAudio = xDecodedAudio.view(inpsize[0],1,inpsize[1]*inpsize[2])
         xDecodedAudio = self.decoder(xDecodedAudio)
-        xDecodedAudioMFCC = self.lastMfcc(xDecodedAudio)
-        return xDecodedAudio,mu,std,xFrontEnd,xDecodedAudioMFCC
+        # xDecodedAudioMFCC = self.lastMfcc(xDecodedAudio)
+        return xDecodedAudio,mu,std
 
     @classmethod
     def load_model(cls, path, cuda=False):

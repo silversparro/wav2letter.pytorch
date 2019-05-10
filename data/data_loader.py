@@ -207,7 +207,7 @@ class SpectrogramParser(AudioParser):
 
 
 class SpectrogramDataset(Dataset, SpectrogramParser):
-    def __init__(self, audio_conf, manifest_filepath, labels, normalize=False,peak_normalization=False, augment=False,w2l2=True):
+    def __init__(self, audio_conf, manifest_filepath, labels, normalize=False,peak_normalization=False, augment=False,w2l2=False):
         """
         Dataset that loads tensors via a csv containing file paths to audio files and transcripts separated by
         a comma. Each new line is a different sample. Example below:
@@ -259,14 +259,16 @@ class SpectrogramDataset(Dataset, SpectrogramParser):
 
 def _collate_fn(batch):
     def func(p):
-        return p[0].shape[0]
-
+        return p[0].shape[1]
+    #TODO try these changes before commit
+    #TODO Check simmilarity between spectogram
     longest_sample = max(batch, key=func)[0]
-    # freq_size = longest_sample.shape[0]
+    freq_size = longest_sample.shape[0]
     minibatch_size = len(batch)
-    max_seqlength = longest_sample.shape[0]
-    inputs = torch.zeros(minibatch_size, 1, max_seqlength)
-    inputsMags = torch.zeros(minibatch_size, 1, max_seqlength)
+    max_seqlength = longest_sample.shape[1]
+    inputs = torch.zeros(minibatch_size, freq_size,max_seqlength)
+    # inputs = torch.zeros(minibatch_size, max_seqlength,freq_size)
+    inputsMags = torch.zeros(minibatch_size, freq_size,max_seqlength)
     input_percentages = torch.FloatTensor(minibatch_size)
     target_sizes = torch.IntTensor(minibatch_size)
     targets = []
@@ -279,16 +281,17 @@ def _collate_fn(batch):
         tensorMag = sample[2]
         tensorPath = sample[3]
         orignalTranscription = sample[4]
-        seq_length = tensor.shape[0]
+        seq_length = tensor.shape[1]
         tensorShape = tensor.shape
         # tensorMagShape = tensorMag.shape
-        # tensorNew = np.pad(tensor,((0,0),(0,abs(tensorShape[1]-max_seqlength))),'wrap')
-        tensorNew = np.pad(tensor, (0,abs(tensorShape[0]-max_seqlength)), 'constant', constant_values=(0))
-        inputs[x][0].copy_(torch.DoubleTensor(tensorNew))
+        tensorNew = np.pad(tensor,((0,0),(0,abs(tensorShape[1]-max_seqlength))),'wrap')
+        # tensorNew = np.pad(tensor,((0,abs(tensorShape[0]-max_seqlength)),(0,0)),'constant', constant_values=(0))
         if tensorMag is not None:
             tensorMagNew = np.pad(tensorMag,((0,0),(0,abs(tensorShape[1]-max_seqlength))),'wrap')
-            inputsMags[x][0].narrow(1, 0, max_seqlength).copy_(torch.FloatTensor(tensorMagNew))
-        # inputs[x][0].narrow(1, 0, max_seqlength).copy_(torch.FloatTensor(tensorNew))
+            inputsMags[x].copy_(torch.FloatTensor(tensorMagNew))
+
+        # inputs[x].narrow(0, 1, max_seqlength).copy_(torch.FloatTensor(tensorNew))
+        inputs[x].copy_(torch.FloatTensor(tensorNew))
         input_percentages[x] = seq_length / float(max_seqlength)
         target_sizes[x] = len(target)
         targets.extend(target)
@@ -296,6 +299,7 @@ def _collate_fn(batch):
         sumValueForInputMag = 0#sum(sum(tensorMag))
         inputFilePathAndTranscription.append([tensorPath,orignalTranscription,sumValueForInput,sumValueForInputMag,tensorShape[0]])
     numChars = len(targets)
+
     targets = torch.IntTensor(targets)
     # inputFilePath = torch.IntTensor(inputFilePath)
     return inputs, targets, input_percentages, target_sizes, inputFilePathAndTranscription, inputsMags

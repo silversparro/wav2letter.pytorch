@@ -11,12 +11,14 @@ import torch.utils.data.distributed
 from torch.autograd import Variable
 from tqdm import tqdm
 from apex import amp
-from data.data_loader import AudioDataLoader, SpectrogramDataset, BucketingSampler, DistributedBucketingSampler
+from data.data_loader import AudioDataLoader, SpectrogramDataset, BucketingSampler, DistributedBucketingSampler,pcen2,_collate_fn
 from data.distributed import DistributedDataParallel
 from decoder import GreedyDecoder
 from modelAutoEncoder import AutoEncoder,Loss
 import Levenshtein as Lev
 import scipy.io.wavfile
+import librosa
+
 
 parser = argparse.ArgumentParser(description='Wav2Letter training')
 parser.add_argument('--train-manifest', metavar='DIR',
@@ -86,6 +88,33 @@ torch.cuda.manual_seed_all(123456)
 def to_np(x):
     return x.data.cpu().numpy()
 
+def getSpectAndPCEN(y,sample_rate=8000,n_fft=160,hop_length=80,normalize=True):
+    win_length = n_fft
+    D = librosa.stft(y, n_fft=n_fft, hop_length=hop_length,
+                     win_length=win_length, window=scipy.signal.hamming)
+
+    spect, phase = librosa.magphase(D)
+    # S = log(S+1)
+    pcenResult = pcen2(E=spect, sr=sample_rate, hop_length=hop_length)
+
+    spect = np.log1p(spect)
+    # spect = torch.FloatTensor(spect)
+    # pcenResult = torch.FloatTensor(pcenResult)
+    if normalize:
+        mean = spect.mean()
+        std = spect.std()
+        # spect.add_(-mean)
+        # spect.div_(std)
+        spect = np.add(spect, -mean)
+        spect = spect / std
+        meanPcen = pcenResult.mean()
+        stdPcen = pcenResult.std()
+        # spect.add_(-mean)
+        # spect.div_(std)
+        pcenResult = np.add(pcenResult, -meanPcen)
+        pcenResult = pcenResult / stdPcen
+
+    return spect, pcenResult
 
 class AverageMeter(object):
     """Computes and stores the average and current value"""
@@ -363,10 +392,17 @@ if __name__ == '__main__':
             target_sizes = Variable(target_sizes, requires_grad=False)
             targets = Variable(targets, requires_grad=False)
             inputs = inputs.to(device)
-            out,mu,std,frontEndAudio,frontEndDecoded = model(inputs)  # TxNxH
-
+            out,mu,std = model(inputs)  # TxNxH
+            outList = []
+            for indexOut,currentRow in enumerate(out):
+                numData = currentRow.cpu().detach().numpy()
+                spect ,pcen = getSpectAndPCEN(numData.squeeze(0))
+                outList.append([spect,[0],pcen,'','_'])
+            outListArray = np.asarray(outList)
+            outputs, _, _, _, _, outputMags = _collate_fn(outListArray)
+            outputs = Variable(outputs, requires_grad=False)
             # outRecon = model.generateAudio(outRecon)
-            loss = criterion(frontEndDecoded, frontEndAudio, mu, std)
+            loss = criterion(outputs, inputs, mu, std)
             # loss = loss / inputs.size(0)  # average the loss by minibatch
             # loss_sum = loss.data.sum()
             inf = float("inf")
@@ -445,8 +481,17 @@ if __name__ == '__main__':
                 inputs = Variable(inputs, volatile=True)
                 inputs = inputs.to(device)
 
-                outValidation, muValidation, stdValidation,frontEndAudio,frontEndDecoded = model(inputs)
-                loss = criterion(frontEndDecoded, frontEndAudio, muValidation, stdValidation)
+                outValidation, muValidation, stdValidation = model(inputs)
+                outList = []
+                for indexOut, currentRow in enumerate(outValidation):
+                    numData = currentRow.cpu().detach().numpy()
+                    spect, pcen = getSpectAndPCEN(numData.squeeze(0))
+                    outList.append([spect, [0], pcen, '', '_'])
+                outListArray = np.asarray(outList)
+                outputs, _, _, _, _, outputMags = _collate_fn(outListArray)
+                outputs = Variable(outputs, requires_grad=False)
+                # outRecon = model.generateAudio(outRecon)
+                loss = criterion(outputs, inputs, mu, std)
                 loss = loss / inputs.size(0)  # average the loss by minibatch
                 loss_sum = loss.data.sum()
                 inf = float("inf")
@@ -469,12 +514,12 @@ if __name__ == '__main__':
                 for idxAudioSave in range(len(inputFilePaths)):
                     fileNameOfAudio = inputFilePaths[idxAudioSave][0].split('/')[-1]
                     audioSaveFolder = savDirForEpoch+'/loss_{}'.format(loss_value)+'/'+fileNameOfAudio
-                    orignalAudio = inputs[idxAudioSave].cpu().numpy().squeeze(0)
+                    # orignalAudio = inputs[idxAudioSave].cpu().numpy().squeeze(0)
                     reconAudio = outValidation[idxAudioSave].cpu().detach().numpy().squeeze(0)
-                    audioSpect = frontEndAudio[idxAudioSave].cpu().detach().numpy().squeeze(0)
-                    outSpect = frontEndDecoded[idxAudioSave].cpu().detach().numpy().squeeze(0)
+                    audioSpect = inputs[idxAudioSave].cpu().detach().numpy()
+                    outSpect = outputs[idxAudioSave].cpu().detach().numpy()
                     os.makedirs(audioSaveFolder)
-                    scipy.io.wavfile.write(audioSaveFolder+'/src.wav', 8000, orignalAudio)
+                    # scipy.io.wavfile.write(audioSaveFolder+'/src.wav', 8000, orignalAudio)
                     scipy.io.wavfile.write(audioSaveFolder+'/recon.wav', 8000, reconAudio)
                     Image.fromarray(audioSpect).convert('RGB').save(audioSaveFolder+'/audio.png')
                     Image.fromarray(outSpect).convert('RGB').save(audioSaveFolder+'/prediccted.png')
