@@ -299,9 +299,9 @@ if __name__ == '__main__':
     decoder = GreedyDecoder(labels)
 
     train_dataset = SpectrogramDataset(audio_conf=audio_conf, manifest_filepath=args.train_manifest, labels=labels,
-                                       normalize=True, peak_normalization=args.peak_normalization, augment=args.augment)
+                                       normalize=False, peak_normalization=args.peak_normalization, augment=args.augment)
     test_dataset = SpectrogramDataset(audio_conf=audio_conf, manifest_filepath=args.val_manifest, labels=labels,
-                                      normalize=True, peak_normalization=args.peak_normalization, augment=False)
+                                      normalize=False, peak_normalization=args.peak_normalization, augment=False)
 
     if not args.distributed:
         train_sampler = BucketingSampler(train_dataset, batch_size=args.batch_size)

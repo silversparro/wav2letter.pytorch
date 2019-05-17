@@ -4,21 +4,19 @@ import json
 import os
 import random
 import time
-from PIL import Image
+
 import numpy as np
 import torch.distributed as dist
 import torch.utils.data.distributed
 from torch.autograd import Variable
 from tqdm import tqdm
+from warpctc_pytorch import CTCLoss
 from apex import amp
-from data.data_loader import AudioDataLoader, SpectrogramDataset, BucketingSampler, DistributedBucketingSampler,pcen2,_collate_fn
+from data_loader import AudioDataLoader, SpectrogramDataset, BucketingSampler, DistributedBucketingSampler
 from data.distributed import DistributedDataParallel
 from decoder import GreedyDecoder
-from modelAutoEncoder import AutoEncoder,Loss
+from model import WaveToLetter
 import Levenshtein as Lev
-import scipy.io.wavfile
-import librosa
-
 
 parser = argparse.ArgumentParser(description='Wav2Letter training')
 parser.add_argument('--train-manifest', metavar='DIR',
@@ -26,7 +24,6 @@ parser.add_argument('--train-manifest', metavar='DIR',
 parser.add_argument('--val-manifest', metavar='DIR',
                     help='path to validation manifest csv', default='~/data/validation.csv')
 parser.add_argument('--sample-rate', default=16000, type=int, help='Sample rate')
-parser.add_argument('--save-audio',dest='saveDir', default='/media/yoda/gargantua/data_pb/data/autoEncoderOutput', help='path to save re-constructed audio')
 parser.add_argument('--batch-size', default=16, type=int, help='Batch size for training')
 parser.add_argument('--num-workers', default=0, type=int, help='Number of workers used in data-loading')
 parser.add_argument('--labels-path', default='labels.json', help='Contains all characters for transcription')
@@ -36,7 +33,7 @@ parser.add_argument('--window-stride', default=.01, type=float, help='Window str
 parser.add_argument('--window', default='hamming', help='Window type for spectrogram generation')
 parser.add_argument('--epochs', default=200, type=int, help='Number of training epochs')
 parser.add_argument('--cuda', default=True,dest='cuda', action='store_true', help='Use cuda to train model')
-parser.add_argument('--lr', '--learning-rate', default=1e-3, type=float, help='initial learning rate')
+parser.add_argument('--lr', '--learning-rate', default=1e-5, type=float, help='initial learning rate')
 parser.add_argument('--mixPrec',dest='mixPrec',default=False,action='store_true', help='use mix precision for training')
 parser.add_argument('--reg-scale', dest='reg_scale', default=0.9, type=float, help='L2 regularizationScale')
 parser.add_argument('--momentum', default=0.90, type=float, help='momentum')
@@ -88,33 +85,6 @@ torch.cuda.manual_seed_all(123456)
 def to_np(x):
     return x.data.cpu().numpy()
 
-def getSpectAndPCEN(y,sample_rate=8000,n_fft=160,hop_length=80,normalize=False):
-    win_length = n_fft
-    D = librosa.stft(y, n_fft=n_fft, hop_length=hop_length,
-                     win_length=win_length, window=scipy.signal.hamming)
-
-    spect, phase = librosa.magphase(D)
-    # S = log(S+1)
-    pcenResult = pcen2(E=spect, sr=sample_rate, hop_length=hop_length)
-
-    spect = np.log1p(spect)
-    # spect = torch.FloatTensor(spect)
-    # pcenResult = torch.FloatTensor(pcenResult)
-    if normalize:
-        mean = spect.mean()
-        std = spect.std()
-        # spect.add_(-mean)
-        # spect.div_(std)
-        spect = np.add(spect, -mean)
-        spect = spect / std
-        meanPcen = pcenResult.mean()
-        stdPcen = pcenResult.std()
-        # spect.add_(-mean)
-        # spect.div_(std)
-        pcenResult = np.add(pcenResult, -meanPcen)
-        pcenResult = pcenResult / stdPcen
-
-    return spect, pcenResult
 
 class AverageMeter(object):
     """Computes and stores the average and current value"""
@@ -243,24 +213,24 @@ if __name__ == '__main__':
             print('Model Save directory already exists.')
         else:
             raise
-    criterion = Loss()
+    criterion = CTCLoss()
 
-    avg_loss, start_epoch, start_iter, avg_validation_loss = 0, 0, 0,0
+    avg_loss, start_epoch, start_iter = 0, 0, 0
     if args.continue_from:  # Starting from previous model
         print("Loading checkpoint model %s" % args.continue_from)
         package = torch.load(args.continue_from, map_location=lambda storage, loc: storage)
-        model = AutoEncoder.load_model_package(package)
-        audio_conf = AutoEncoder.get_audio_conf(model)
-        labels = AutoEncoder.get_labels(model)
+        model = WaveToLetter.load_model_package(package)
+        audio_conf = WaveToLetter.get_audio_conf(model)
+        labels = WaveToLetter.get_labels(model)
         parameters = model.parameters()
         optimizer = torch.optim.SGD(parameters, lr=args.lr,
                                     momentum=args.momentum, nesterov=True)
 
         if args.noise_dir is not None:
-            model = AutoEncoder.setAudioConfKey(model,'noise_dir',args.noise_dir)
-            model = AutoEncoder.setAudioConfKey(model,'noise_prob',args.noise_prob)
-            model = AutoEncoder.setAudioConfKey(model,'noise_max',args.noise_max)
-            model = AutoEncoder.setAudioConfKey(model,'noise_min',args.noise_min)
+            model = WaveToLetter.setAudioConfKey(model,'noise_dir',args.noise_dir)
+            model = WaveToLetter.setAudioConfKey(model,'noise_prob',args.noise_prob)
+            model = WaveToLetter.setAudioConfKey(model,'noise_max',args.noise_max)
+            model = WaveToLetter.setAudioConfKey(model,'noise_min',args.noise_min)
 
         if not args.finetune:  # Don't want to restart training
             # if args.cuda:
@@ -309,8 +279,8 @@ if __name__ == '__main__':
                     }
                     tensorboard_writer.add_scalars(args.id, values, i + 1)
     else:
-        # with open(args.labels_path) as label_file:
-        #     labels = str(''.join(json.load(label_file)))
+        with open(args.labels_path) as label_file:
+            labels = str(''.join(json.load(label_file)))
 
         audio_conf = dict(sample_rate=args.sample_rate,
                           window_size=args.window_size,
@@ -320,11 +290,14 @@ if __name__ == '__main__':
                           noise_prob=args.noise_prob,
                           noise_levels=(args.noise_min, args.noise_max))
 
-        model = AutoEncoder(audio_conf=audio_conf,sample_rate=args.sample_rate,window_size=args.window_size,mixed_precision=args.mixPrec)
+        model = WaveToLetter(labels=labels,
+                           audio_conf=audio_conf,sample_rate=args.sample_rate,window_size=args.window_size,mixed_precision=args.mixPrec)
         # parameters = model.parameters()
         # optimizer = torch.optim.SGD(parameters, lr=args.lr,
         #                             momentum=args.momentum, nesterov=True)
-    labels = '_abcdefghijklmnopqrstuvwxyz '
+
+    decoder = GreedyDecoder(labels)
+
     train_dataset = SpectrogramDataset(audio_conf=audio_conf, manifest_filepath=args.train_manifest, labels=labels,
                                        normalize=False, peak_normalization=args.peak_normalization, augment=args.augment)
     test_dataset = SpectrogramDataset(audio_conf=audio_conf, manifest_filepath=args.val_manifest, labels=labels,
@@ -332,11 +305,8 @@ if __name__ == '__main__':
 
     if not args.distributed:
         train_sampler = BucketingSampler(train_dataset, batch_size=args.batch_size)
-        test_sampler = BucketingSampler(test_dataset, batch_size=args.batch_size)
     else:
         train_sampler = DistributedBucketingSampler(train_dataset, batch_size=args.batch_size,
-                                                    num_replicas=args.world_size, rank=args.rank)
-        test_sampler = DistributedBucketingSampler(test_dataset, batch_size=args.batch_size,
                                                     num_replicas=args.world_size, rank=args.rank)
     train_loader = AudioDataLoader(train_dataset,
                                    num_workers=args.num_workers, batch_sampler=train_sampler)
@@ -363,16 +333,12 @@ if __name__ == '__main__':
     if args.mixPrec:
         model, optimizer = amp.initialize(model, optimizer, opt_level="O2")
     print(model)
-    print("Number of parameters: %d" % AutoEncoder.get_param_size(model))
+    print("Number of parameters: %d" % WaveToLetter.get_param_size(model))
 
     batch_time = AverageMeter()
-    batch_time_validation = AverageMeter()
     data_time = AverageMeter()
-    data_time_validation = AverageMeter()
     losses = AverageMeter()
-    validationLoss = AverageMeter()
     globalStep = 0
-    validationResultSaveDir = args.saveDir
     for epoch in range(start_epoch, args.epochs):
         torch.cuda.empty_cache()
         if not args.no_shuffle:
@@ -392,26 +358,23 @@ if __name__ == '__main__':
             target_sizes = Variable(target_sizes, requires_grad=False)
             targets = Variable(targets, requires_grad=False)
             inputs = inputs.to(device)
-            out,mu,std = model(inputs)  # TxNxH
-            outList = []
-            # for indexOut,currentRow in enumerate(out):
-            #     numData = currentRow.cpu().detach().numpy()
-            #     spect ,pcen = getSpectAndPCEN(numData.squeeze(0))
-            #     outList.append([spect,[0],pcen,'','_'])
-            # outListArray = np.asarray(outList)
-            # outputs, _, _, _, _, outputMags = _collate_fn(outListArray)
-            # outputs = Variable(outputs, requires_grad=False)
-            # outRecon = model.generateAudio(outRecon)
-            loss = criterion(out, inputs, mu, std)
-            # loss = loss / inputs.size(0)  # average the loss by minibatch
-            # loss_sum = loss.data.sum()
+            out = model(inputs)
+            out = out.transpose(0, 1)  # TxNxH
+
+            seq_length = out.size(0)
+            sizes = Variable(input_percentages.mul_(int(seq_length)).int(), requires_grad=False)
+
+            out = out.cpu()
+            loss = criterion(out, targets, sizes, target_sizes)
+            loss = loss / inputs.size(0)  # average the loss by minibatch
+            loss_sum = loss.data.sum()
             inf = float("inf")
 
-            if loss.data.item() == inf or loss.data.item() == -inf:
+            if loss_sum == inf or loss_sum == -inf:
                 print("WARNING: received an inf loss, setting loss value to 0")
                 loss_value = 0
             else:
-                loss_value = loss.data.item()
+                loss_value = loss.data[0]
 
 
             avg_loss += loss_value
@@ -442,13 +405,13 @@ if __name__ == '__main__':
                     data_time=data_time, loss=losses))
             # if losses.val <0.01:
             #     out = out.transpose(0,1)
-            #     decoded_output, _ = decoderAE.decode(out.data, sizes)
+            #     decoded_output, _ = decoder.decode(out.data, sizes)
             #     for numFile,idxP in enumerate(decoded_output):
             #         print(idxP),inputFilePaths[numFile][1]
             if args.checkpoint_per_batch > 0 and i > 0 and (i + 1) % args.checkpoint_per_batch == 0 and main_proc:
                 file_path = '%s/wav2Letter_checkpoint_epoch_%d_iter_%d.pth.tar' % (save_folder, epoch + 1, i + 1)
                 print("Saving checkpoint model to %s" % file_path)
-                torch.save(AutoEncoder.serialize(model, optimizer=optimizer, epoch=epoch, iteration=i,
+                torch.save(WaveToLetter.serialize(model, optimizer=optimizer, epoch=epoch, iteration=i,
                                                 loss_results=loss_results,
                                                 wer_results=wer_results, cer_results=cer_results, avg_loss=avg_loss),
                            file_path)
@@ -467,64 +430,50 @@ if __name__ == '__main__':
         start_iter = 0  # Reset start iteration for next epoch
         total_cer, total_wer = 0, 0
         model.eval()
-        end = time.time()
-        savDirForEpoch = validationResultSaveDir + '/{}'.format(epoch+1)
-
-        if not os.path.exists(savDirForEpoch):
-            os.makedirs(savDirForEpoch)
-
         if (epoch+1)%1==0:
             print ("coming into test loop")
             for i, (data) in tqdm(enumerate(test_loader), total=len(test_loader)):
                 inputs, targets, input_percentages, target_sizes, inputFilePaths, inputsMags = data
-                data_time_validation.update(time.time() - end)
+
                 inputs = Variable(inputs, volatile=True)
                 inputs = inputs.to(device)
 
-                outValidation, muValidation, stdValidation = model(inputs)
-                # outList = []
-                # for indexOut, currentRow in enumerate(outValidation):
-                #     numData = currentRow.cpu().detach().numpy()
-                #     spect, pcen = getSpectAndPCEN(numData.squeeze(0))
-                #     outList.append([spect, [0], pcen, '', '_'])
-                # outListArray = np.asarray(outList)
-                # outputs, _, _, _, _, outputMags = _collate_fn(outListArray)
-                # outputs = Variable(outputs, requires_grad=False)
-                # outRecon = model.generateAudio(outRecon)
-                loss = criterion(outValidation, inputs, muValidation, stdValidation)
-                loss = loss / inputs.size(0)  # average the loss by minibatch
-                loss_sum = loss.data.sum()
-                inf = float("inf")
 
-                if loss_sum == inf or loss_sum == -inf:
-                    print("WARNING: received an inf loss, setting loss value to 0")
-                    loss_value = 0
-                else:
-                    loss_value = loss.data.item()
+                # unflatten targets
+                split_targets = []
+                offset = 0
+                for size in target_sizes:
+                    split_targets.append(targets[offset:offset + size])
+                    offset += size
 
-                avg_validation_loss += loss_value
-                validationLoss.update(loss_value, inputs.size(0))
-                batch_time_validation.update(time.time() - end)
-                end = time.time()
+                # if args.cuda:
+                #     inputsMags = inputsMags.cuda()
+
+                out = model(inputs)  # NxTxH
+                seq_length = out.size(1)
+                sizes = input_percentages.mul_(int(seq_length)).int()
+
+                decoded_output, _ = decoder.decode(out.data, sizes)
+                target_strings = decoder.convert_to_strings(split_targets)
+
+                wer, cer = 0, 0
+                for x in range(len(target_strings)):
+                    transcript, reference = decoded_output[x][0], target_strings[x][0]
+                    print ('transcript : {}, reference :{} , filePath : {}'.format(transcript,reference,inputFilePaths[x][0]))
+                    # print 'reference : {}'.format(reference)
+                    try:
+                        wer += decoder.wer(transcript, reference) / float(len(reference.split()))
+                        cer += decoder.cer(transcript, reference) / float(len(reference))
+                    except Exception as e:
+                        print ('encountered exception {}'.format(e))
+                total_cer += cer
+                total_wer += wer
+
                 if args.cuda:
                     torch.cuda.synchronize()
-
+                del out
                 torch.cuda.empty_cache()
-
-                for idxAudioSave in range(len(inputFilePaths)):
-                    fileNameOfAudio = inputFilePaths[idxAudioSave][0].split('/')[-1]
-                    audioSaveFolder = savDirForEpoch+'/loss_{}'.format(loss_value)+'/'+fileNameOfAudio
-                    # orignalAudio = inputs[idxAudioSave].cpu().numpy().squeeze(0)
-                    # reconAudio = outValidation[idxAudioSave].cpu().detach().numpy()
-                    audioSpect = inputs[idxAudioSave].cpu().detach().numpy()
-                    outSpect = outValidation[idxAudioSave].cpu().detach().numpy()
-                    os.makedirs(audioSaveFolder)
-                    # scipy.io.wavfile.write(audioSaveFolder+'/src.wav', 8000, orignalAudio)
-                    # scipy.io.wavfile.write(audioSaveFolder+'/recon.wav', 8000, reconAudio)
-                    Image.fromarray(audioSpect).convert('RGB').save(audioSaveFolder+'/audio.png')
-                    Image.fromarray(outSpect).convert('RGB').save(audioSaveFolder+'/prediccted.png')
-                del outValidation
-        wer = validationLoss.avg
+        wer = total_wer / len(test_loader.dataset)
         cer = total_cer / len(test_loader.dataset)
         wer *= 100
         cer *= 100
@@ -532,8 +481,9 @@ if __name__ == '__main__':
         wer_results[epoch] = wer
         cer_results[epoch] = cer
         print('Validation Summary Epoch: [{0}]\t'
-              'Average WER {wer:.3f}\t'.format(
-            epoch + 1, wer=wer))
+              'Average WER {wer:.3f}\t'
+              'Average CER {cer:.3f}\t'.format(
+            epoch + 1, wer=wer, cer=cer))
 
         if args.visdom and main_proc:
             x_axis = epochs[0:epoch + 1]
@@ -565,7 +515,7 @@ if __name__ == '__main__':
                     tensorboard_writer.add_histogram(tag + '/grad', to_np(value.grad), epoch + 1)
         if args.checkpoint and main_proc:
             file_path = '%s/wav2Letter_%d.pth.tar' % (save_folder, epoch + 1)
-            torch.save(AutoEncoder.serialize(model, optimizer=optimizer, epoch=epoch, loss_results=loss_results,
+            torch.save(WaveToLetter.serialize(model, optimizer=optimizer, epoch=epoch, loss_results=loss_results,
                                             wer_results=wer_results, cer_results=cer_results),
                        file_path)
         if (epoch + 1) % 1 == 0:
@@ -581,7 +531,7 @@ if __name__ == '__main__':
         # if (best_wer is None or best_wer > wer) and main_proc:
         if main_proc:
             # print("Found better validated model, saving to %s" % args.model_path)
-            torch.save(AutoEncoder.serialize(model, optimizer=optimizer, epoch=epoch, loss_results=loss_results,
+            torch.save(WaveToLetter.serialize(model, optimizer=optimizer, epoch=epoch, loss_results=loss_results,
                                             wer_results=wer_results, cer_results=cer_results)
                        , args.model_path)
 

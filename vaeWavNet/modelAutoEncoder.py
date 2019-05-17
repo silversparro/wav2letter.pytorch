@@ -19,7 +19,7 @@ def mu_encode_torch(x, n_quanta):
 class Loss(nn.Module):
     def __init__(self):
         super(Loss, self).__init__()
-        self.mse_loss = nn.MSELoss(reduction="sum")
+        self.mse_loss = nn.MSELoss(reduction="meana ")
 
     def forward(self, recon_x, x, mu, sigma):
 
@@ -289,25 +289,39 @@ class AutoEncoder(nn.Module):
         nfft = (self._sample_rate * self._window_size)
         input_size = 1+int((nfft/2))
         hop_length = sample_rate * self._audio_conf.get("window_stride", 0.01)
-        kernal = [3, 3, 4, 3, 3, 1, 1, 1, 1]
-        strides = [1, 1, 2, 1, 1, 1, 1, 1, 1]
-        stack_residual = [False, True, False, True, True, True, True, True, True]
-        self.frontEnd = stft(hop_length=int(hop_length), nfft=int(nfft))
+        kernal = [1, 1, 1, 1, 1, 1, 1, 1, 1]
+        strides = [1, 1, 1, 1, 1, 1, 1, 1, 1]
+        stack_residual = [False, False, False, False, False, False, False, False, False]
+        # self.frontEnd = stft(hop_length=int(hop_length), nfft=int(nfft))
         conv1ds = []
-
+        conv1dsDecoder = []
         for idx,(kernal_size,stride,residual) in enumerate(zip(kernal,strides,stack_residual)):
 
             convTemp = ConEncoder(input_size=input_size,output_size=768,kernal_size=(kernal_size,),stride=stride,residual=residual)
             input_size=768
             conv1ds.append(('encoder_conv1d_{}'.format(idx),convTemp))
 
+        input_size = 128
+        for idx,(kernal_size,stride,residual) in enumerate(zip(kernal,strides,stack_residual)):
+
+            if idx == len(kernal)-1:
+
+                convTemp = ConEncoder(input_size=input_size,output_size=1+int((nfft/2)),kernal_size=(kernal_size,),stride=stride,residual=residual)
+            else:
+                convTemp = ConEncoder(input_size=input_size, output_size=768, kernal_size=(kernal_size,), stride=stride,
+                                      residual=residual)
+                input_size=768
+            # input_size=768
+            conv1dsDecoder.append(('decoder_conv_1d_{}'.format(idx),convTemp))
+
         self.conv1ds = nn.Sequential(OrderedDict(conv1ds))
         self.bottleNeck = VAEImpl(768,64)
-        self.jitter = Jitter(0.12)
+        # self.jitter = Jitter(0.12)
         # self.decoder = WaveNet(num_time_samples=2048,num_channels=128,num_blocks=2,num_layers=10,num_hidden=128)
         # self.decoder = FastWaveNet()
-        self.decoder = WaveNetModel()
-        self.lastMfcc = stft(hop_length=int(hop_length), nfft=int(nfft))
+        # self.decoder = WaveNetModel()
+        self.decoder = nn.Sequential(OrderedDict(conv1dsDecoder))
+        # self.lastMfcc = stft(hop_length=int(hop_length), nfft=int(nfft))
 
     def forward(self, x):
         # orignalSize = x.size()
@@ -317,8 +331,8 @@ class AutoEncoder(nn.Module):
         xDecodedAudio,mu,std = self.bottleNeck(xDecodedAudio)
         # x = self.jitter(x)
         # x = x.unsqueeze(1)
-        inpsize = xDecodedAudio.size()
-        xDecodedAudio = xDecodedAudio.view(inpsize[0],1,inpsize[1]*inpsize[2])
+        # inpsize = xDecodedAudio.size()
+        # xDecodedAudio = xDecodedAudio.view(inpsize[0],1,inpsize[1]*inpsize[2])
         xDecodedAudio = self.decoder(xDecodedAudio)
         # xDecodedAudioMFCC = self.lastMfcc(xDecodedAudio)
         return xDecodedAudio,mu,std
