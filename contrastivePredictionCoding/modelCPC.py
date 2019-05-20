@@ -157,6 +157,7 @@ class CDCK2(nn.Module):
 
         super(CDCK2, self).__init__()
         self.timestep = timestep
+        self._version = '0.0.1'
         self.encoder = nn.Sequential(  # downsampling factor = 160
             nn.Conv1d(1, 512, kernel_size=10, stride=5, padding=3, bias=False),
             nn.BatchNorm1d(512),
@@ -175,7 +176,11 @@ class CDCK2(nn.Module):
             nn.ReLU(inplace=True)
         )
         self.gru = nn.GRU(512, 256, num_layers=1, bidirectional=False, batch_first=True)
+        # self.Wk = nn.ModuleList([nn.Conv1d(256, 512,kernel_size=1,stride=1) for i in range(timestep)])
         self.Wk = nn.ModuleList([nn.Linear(256, 512) for i in range(timestep)])
+        # self.Wk = []
+        # for i in range(timestep):
+        #     self.WK.append(nn.Linear(256, 512))
         self.softmax = nn.Softmax()
         self.lsoftmax = nn.LogSoftmax()
 
@@ -209,11 +214,12 @@ class CDCK2(nn.Module):
             seqLen = seq_lens[i].item()
             input_percentages[i] = seqLen/float(maxSeqLen)
         return input_percentages,maxSeqLen
-    def forward(self, x, hidden,seq_lens):
+    def forward(self, x,seq_lens):
         batch = x.size()[0]
+        hidden = torch.zeros(1, batch, 256).cuda()
         seq_perc,maxLen = self.makeTheInputPercUsingSeqLens(batch,seq_lens)
 
-        t_samples_audios = torch.LongTensor([torch.randint(seq_len / 160 - self.timestep, size=(1,)).long() for seq_len in seq_lens])
+        t_samples_audios = torch.LongTensor([torch.randint(int((seq_len.item() / 160) - self.timestep), size=(1,)).long() for seq_len in seq_lens])
 
         max_sample_audios = torch.max(t_samples_audios)
         # t_samples = torch.randint(self.seq_len / 160 - self.timestep, size=(1,)).long()  # randomly pick time stamps
@@ -226,39 +232,46 @@ class CDCK2(nn.Module):
         sizesAfterEncoder = seq_perc.mul_(int(seqAfterEncoder)).int()
         nce = 0  # average over timestep and batch
         encode_samples = torch.empty((self.timestep, batch, 512)).float()  # e.g. size 12*8*512
-        forward_seq_var = torch.zeros((batch, max_sample_audios, 512)).float()
+        forward_seq_var = torch.zeros((batch, max_sample_audios+1, 512)).float()
+
         for batchNum in range(batch):
             t_samples = t_samples_audios[batchNum]
-            zForCurrentSample = z[batchNum, :sizesAfterEncoder[batchNum], :]
+            sizeAfterEnc =sizesAfterEncoder[batchNum]
+            zForCurrentSample = z[batchNum, :, :]
             for i in np.arange(1, self.timestep + 1):
 
-                encode_samples[i - 1] = zForCurrentSample[ t_samples + i, :].view(1, 512)  # z_tk e.g. size 8*512
+                encode_samples[i - 1,batchNum,:] = zForCurrentSample[ t_samples + i, :].view(1, 512)  # z_tk e.g. size 8*512
 
-            forward_seq_var[batchNum,:,:] = zForCurrentSample[:t_samples + 1, :]
+            forward_seq_var[batchNum,:t_samples + 1,:] = z[batchNum,:t_samples + 1, :]
         #original :
         # forward_seq = z[:, :t_samples + 1, :]  # e.g. size 8*100*512
 
-        output, hidden = self.gru(forward_seq_var, hidden)  # output size e.g. 8*100*256
+        output, hidden = self.gru(forward_seq_var.cuda(), hidden)  # output size e.g. 8*100*256
+        seq_perc, maxLen = self.makeTheInputPercUsingSeqLens(batch, t_samples_audios)
         sizesAfterGru = seq_perc.mul_(int(output.size(1))).int()
-        c_t_var = torch.zeros((batch, output.size(1), 256)).float()
+        c_t_var = torch.zeros((batch, 256)).float()
         for batchNum in range(batch):
             t_samples = t_samples_audios[batchNum]
-            outputForItem = output[batchNum,:sizesAfterGru,:]
-            c_t = outputForItem[t_samples, :].view(1, 256)  # c_t e.g. size 8*256
-            c_t_var[batchNum,:t_samples] = c_t
-
-        pred = torch.empty((self.timestep, batch, 512)).float()  # e.g. size 12*8*512
+            outputForItem = output[batchNum,:,:] #TODO CHECK this before commit
+            c_t = outputForItem[t_samples-1, :].view(1, 256)  # c_t e.g. size 8*256
+            c_t_var[batchNum,:] = c_t
+        # _,time,nChannels = c_t_var.size()
+        # c_t_var = c_t_var.transpose(1,2) # BXCXT
+        pred = torch.empty((self.timestep, batch, 512)).float().cuda()  # e.g. size 12*8*512
         for i in np.arange(0, self.timestep):
             linear = self.Wk[i]
-            pred[i] = linear(c_t_var)  # Wk*c_t e.g. size 8*512
+            oL = linear(c_t_var.cuda())  # Wk*c_t e.g. size 8*512
+            pred[i] = oL
 
+        correct=0
         for i in np.arange(0, self.timestep):
-            total = torch.mm(encode_samples[i], torch.transpose(pred[i], 0, 1))  # e.g. size 8*8
-            correct = torch.sum(
-                torch.eq(torch.argmax(self.softmax(total), dim=0), torch.arange(0, batch)))  # correct is a tensor
+            total = torch.mm(encode_samples[i].cuda(), torch.transpose(pred[i], 0, 1))  # e.g. size 8*8
+            total = total.cuda()
+            correct += torch.sum(
+                torch.eq(torch.argmax(self.softmax(total), dim=0), torch.arange(0, batch).cuda())).item() # correct is a tensor
             nce += torch.sum(torch.diag(self.lsoftmax(total)))  # nce is a tensor
         nce /= -1. * batch * self.timestep
-        accuracy = 1. * correct.item() / batch
+        accuracy = 1. * correct / batch
 
         return accuracy, nce, hidden
 
@@ -273,6 +286,74 @@ class CDCK2(nn.Module):
 
         return output, hidden  # return every frame
         # return output[:,-1,:], hidden # only return the last frame per utt
+
+    @classmethod
+    def load_model(cls, path, cuda=False):
+        package = torch.load(path, map_location=lambda storage, loc: storage)
+        model = cls(timestep=package['timestep'])
+        blacklist = ['rnns.0.batch_norm.module.weight', 'rnns.0.batch_norm.module.bias',
+                     'rnns.0.batch_norm.module.running_mean', 'rnns.0.batch_norm.module.running_var']
+
+        for x in blacklist:
+            if x in package['state_dict']:
+                del package['state_dict'][x]
+        #         del package['state_dict'][keyname]
+        model.load_state_dict(package['state_dict'])
+        if cuda:
+            model = torch.nn.DataParallel(model).cuda()
+        return model
+
+    @classmethod
+    def load_model_package(cls, package, cuda=False):
+        model = cls(timestep=package['timestep'])
+        model.load_state_dict(package['state_dict'])
+        if cuda:
+            model = torch.nn.DataParallel(model).cuda()
+        return model
+
+    @staticmethod
+    def serialize(model, optimizer=None, epoch=None, iteration=None, loss_results=None,
+                  cer_results=None, wer_results=None, avg_loss=None, meta=None):
+        # model_is_cuda = next(model.parameters()).is_cuda
+        # model = model.module if model_is_cuda else model
+        package = {
+            'timestep': model.timestep,
+            'version':model._version
+        }
+        if optimizer is not None:
+            package['optim_dict'] = optimizer.state_dict()
+        if avg_loss is not None:
+            package['avg_loss'] = avg_loss
+        if epoch is not None:
+            package['epoch'] = epoch + 1  # increment for readability
+        if iteration is not None:
+            package['iteration'] = iteration
+        if loss_results is not None:
+            package['loss_results'] = loss_results
+            package['cer_results'] = cer_results
+            package['wer_results'] = wer_results
+        if meta is not None:
+            package['meta'] = meta
+        return package
+
+    @staticmethod
+    def get_param_size(model):
+        params = 0
+        for p in model.parameters():
+            tmp = 1
+            for x in p.size():
+                tmp *= x
+            params += tmp
+        return params
+
+    @staticmethod
+    def get_meta(model):
+        model_is_cuda = next(model.parameters()).is_cuda
+        m = model.module if model_is_cuda else model
+        meta = {
+            "version": m._version
+        }
+        return meta
 
 if __name__ == '__main__':
     pass

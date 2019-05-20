@@ -290,7 +290,8 @@ def _collate_fn(batch):
             tensorMagNew = np.pad(tensorMag,((0,0),(0,abs(tensorShape[1]-max_seqlength))),'wrap')
             inputsMags[x][0].narrow(1, 0, max_seqlength).copy_(torch.FloatTensor(tensorMagNew))
         # inputs[x][0].narrow(1, 0, max_seqlength).copy_(torch.FloatTensor(tensorNew))
-        input_percentages[x] = seq_length / float(max_seqlength)
+        # input_percentages[x] = seq_length / float(max_seqlength)
+        input_percentages[x] = seq_length
         target_sizes[x] = len(target)
         targets.extend(target)
         sumValueForInput = 0#sum(sum(tensor))

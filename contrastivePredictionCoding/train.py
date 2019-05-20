@@ -15,7 +15,7 @@ from apex import amp
 from data_loader import AudioDataLoader, SpectrogramDataset, BucketingSampler, DistributedBucketingSampler
 from data.distributed import DistributedDataParallel
 from decoder import GreedyDecoder
-from model import WaveToLetter
+from modelCPC import CDCK2
 import Levenshtein as Lev
 
 parser = argparse.ArgumentParser(description='Wav2Letter training')
@@ -24,9 +24,10 @@ parser.add_argument('--train-manifest', metavar='DIR',
 parser.add_argument('--val-manifest', metavar='DIR',
                     help='path to validation manifest csv', default='~/data/validation.csv')
 parser.add_argument('--sample-rate', default=16000, type=int, help='Sample rate')
+parser.add_argument('--timestep', default=4, type=int, help='number of steps to look forward the context and predict the output')
 parser.add_argument('--batch-size', default=16, type=int, help='Batch size for training')
 parser.add_argument('--num-workers', default=0, type=int, help='Number of workers used in data-loading')
-parser.add_argument('--labels-path', default='labels.json', help='Contains all characters for transcription')
+parser.add_argument('--labels-path', default='/home/yoda/ML/wav2LetterPytorch/labels.json', help='Contains all characters for transcription')
 parser.add_argument('--window-size', default=.02, type=float, help='Window size for spectrogram in seconds')
 parser.add_argument('--peak-normalization',dest='peak_normalization', default=False, action='store_true', help='Apply peak normalization while training and validation')
 parser.add_argument('--window-stride', default=.01, type=float, help='Window stride for spectrogram in seconds')
@@ -219,18 +220,18 @@ if __name__ == '__main__':
     if args.continue_from:  # Starting from previous model
         print("Loading checkpoint model %s" % args.continue_from)
         package = torch.load(args.continue_from, map_location=lambda storage, loc: storage)
-        model = WaveToLetter.load_model_package(package)
-        audio_conf = WaveToLetter.get_audio_conf(model)
-        labels = WaveToLetter.get_labels(model)
+        model = CDCK2.load_model_package(package)
+        # audio_conf = CDCK2.get_audio_conf(model)
+        # labels = CDCK2.get_labels(model)
         parameters = model.parameters()
         optimizer = torch.optim.SGD(parameters, lr=args.lr,
                                     momentum=args.momentum, nesterov=True)
 
-        if args.noise_dir is not None:
-            model = WaveToLetter.setAudioConfKey(model,'noise_dir',args.noise_dir)
-            model = WaveToLetter.setAudioConfKey(model,'noise_prob',args.noise_prob)
-            model = WaveToLetter.setAudioConfKey(model,'noise_max',args.noise_max)
-            model = WaveToLetter.setAudioConfKey(model,'noise_min',args.noise_min)
+        # if args.noise_dir is not None:
+        #     model = CDCK2.setAudioConfKey(model,'noise_dir',args.noise_dir)
+        #     model = CDCK2.setAudioConfKey(model,'noise_prob',args.noise_prob)
+        #     model = CDCK2.setAudioConfKey(model,'noise_max',args.noise_max)
+        #     model = CDCK2.setAudioConfKey(model,'noise_min',args.noise_min)
 
         if not args.finetune:  # Don't want to restart training
             # if args.cuda:
@@ -279,24 +280,23 @@ if __name__ == '__main__':
                     }
                     tensorboard_writer.add_scalars(args.id, values, i + 1)
     else:
-        with open(args.labels_path) as label_file:
-            labels = str(''.join(json.load(label_file)))
 
-        audio_conf = dict(sample_rate=args.sample_rate,
-                          window_size=args.window_size,
-                          window_stride=args.window_stride,
-                          window=args.window,
-                          noise_dir=args.noise_dir,
-                          noise_prob=args.noise_prob,
-                          noise_levels=(args.noise_min, args.noise_max))
 
-        model = WaveToLetter(labels=labels,
-                           audio_conf=audio_conf,sample_rate=args.sample_rate,window_size=args.window_size,mixed_precision=args.mixPrec)
+        model = CDCK2(timestep=args.timestep)
         # parameters = model.parameters()
         # optimizer = torch.optim.SGD(parameters, lr=args.lr,
         #                             momentum=args.momentum, nesterov=True)
+    with open(args.labels_path) as label_file:
+        labels = str(''.join(json.load(label_file)))
 
-    decoder = GreedyDecoder(labels)
+    audio_conf = dict(sample_rate=args.sample_rate,
+                      window_size=args.window_size,
+                      window_stride=args.window_stride,
+                      window=args.window,
+                      noise_dir=args.noise_dir,
+                      noise_prob=args.noise_prob,
+                      noise_levels=(args.noise_min, args.noise_max))
+    # decoder = GreedyDecoder(labels)
 
     train_dataset = SpectrogramDataset(audio_conf=audio_conf, manifest_filepath=args.train_manifest, labels=labels,
                                        normalize=False, peak_normalization=args.peak_normalization, augment=args.augment)
@@ -333,7 +333,7 @@ if __name__ == '__main__':
     if args.mixPrec:
         model, optimizer = amp.initialize(model, optimizer, opt_level="O2")
     print(model)
-    print("Number of parameters: %d" % WaveToLetter.get_param_size(model))
+    print("Number of parameters: %d" % CDCK2.get_param_size(model))
 
     batch_time = AverageMeter()
     data_time = AverageMeter()
@@ -355,26 +355,19 @@ if __name__ == '__main__':
             # measure data loading time
             data_time.update(time.time() - end)
             inputs = Variable(inputs, requires_grad=False)
-            target_sizes = Variable(target_sizes, requires_grad=False)
-            targets = Variable(targets, requires_grad=False)
             inputs = inputs.to(device)
-            out = model(inputs)
-            out = out.transpose(0, 1)  # TxNxH
 
-            seq_length = out.size(0)
-            sizes = Variable(input_percentages.mul_(int(seq_length)).int(), requires_grad=False)
-
-            out = out.cpu()
-            loss = criterion(out, targets, sizes, target_sizes)
-            loss = loss / inputs.size(0)  # average the loss by minibatch
+            acc, loss, hidden = model(inputs, input_percentages)
             loss_sum = loss.data.sum()
+            # loss.backward(retain_graph=True)
+            # optimizer.step()
             inf = float("inf")
 
             if loss_sum == inf or loss_sum == -inf:
                 print("WARNING: received an inf loss, setting loss value to 0")
                 loss_value = 0
             else:
-                loss_value = loss.data[0]
+                loss_value = loss.data.item()
 
 
             avg_loss += loss_value
@@ -411,12 +404,13 @@ if __name__ == '__main__':
             if args.checkpoint_per_batch > 0 and i > 0 and (i + 1) % args.checkpoint_per_batch == 0 and main_proc:
                 file_path = '%s/wav2Letter_checkpoint_epoch_%d_iter_%d.pth.tar' % (save_folder, epoch + 1, i + 1)
                 print("Saving checkpoint model to %s" % file_path)
-                torch.save(WaveToLetter.serialize(model, optimizer=optimizer, epoch=epoch, iteration=i,
+                torch.save(CDCK2.serialize(model, optimizer=optimizer, epoch=epoch, iteration=i,
                                                 loss_results=loss_results,
                                                 wer_results=wer_results, cer_results=cer_results, avg_loss=avg_loss),
                            file_path)
             del loss
-            del out
+            del acc
+            del hidden
             torch.cuda.empty_cache()
 
         avg_loss /= len(train_sampler)
@@ -430,60 +424,34 @@ if __name__ == '__main__':
         start_iter = 0  # Reset start iteration for next epoch
         total_cer, total_wer = 0, 0
         model.eval()
+        valLoss = []
         if (epoch+1)%1==0:
             print ("coming into test loop")
+
             for i, (data) in tqdm(enumerate(test_loader), total=len(test_loader)):
                 inputs, targets, input_percentages, target_sizes, inputFilePaths, inputsMags = data
 
-                inputs = Variable(inputs, volatile=True)
+                inputs = Variable(inputs, requires_grad=False)
                 inputs = inputs.to(device)
 
-
-                # unflatten targets
-                split_targets = []
-                offset = 0
-                for size in target_sizes:
-                    split_targets.append(targets[offset:offset + size])
-                    offset += size
-
-                # if args.cuda:
-                #     inputsMags = inputsMags.cuda()
-
-                out = model(inputs)  # NxTxH
-                seq_length = out.size(1)
-                sizes = input_percentages.mul_(int(seq_length)).int()
-
-                decoded_output, _ = decoder.decode(out.data, sizes)
-                target_strings = decoder.convert_to_strings(split_targets)
-
-                wer, cer = 0, 0
-                for x in range(len(target_strings)):
-                    transcript, reference = decoded_output[x][0], target_strings[x][0]
-                    print ('transcript : {}, reference :{} , filePath : {}'.format(transcript,reference,inputFilePaths[x][0]))
-                    # print 'reference : {}'.format(reference)
-                    try:
-                        wer += decoder.wer(transcript, reference) / float(len(reference.split()))
-                        cer += decoder.cer(transcript, reference) / float(len(reference))
-                    except Exception as e:
-                        print ('encountered exception {}'.format(e))
-                total_cer += cer
-                total_wer += wer
-
+                acc, loss, hidden = model(inputs, input_percentages)
+                loss_sum = loss.data.sum()
+                valLoss.append(loss_sum)
                 if args.cuda:
                     torch.cuda.synchronize()
-                del out
+                del acc,loss,hidden
                 torch.cuda.empty_cache()
-        wer = total_wer / len(test_loader.dataset)
-        cer = total_cer / len(test_loader.dataset)
-        wer *= 100
-        cer *= 100
+        # wer = total_wer / len(test_loader.dataset)
+        # cer = total_cer / len(test_loader.dataset)
+        # wer *= 100
+        # cer *= 100
+        avgValLoss=sum(valLoss)/float(len(valLoss))
         loss_results[epoch] = avg_loss
-        wer_results[epoch] = wer
-        cer_results[epoch] = cer
+        # wer_results[epoch] = wer
+        # cer_results[epoch] = cer
         print('Validation Summary Epoch: [{0}]\t'
-              'Average WER {wer:.3f}\t'
-              'Average CER {cer:.3f}\t'.format(
-            epoch + 1, wer=wer, cer=cer))
+              'Average LOSS {wer:.3f}\t'.format(
+            epoch + 1,wer=avgValLoss))
 
         if args.visdom and main_proc:
             x_axis = epochs[0:epoch + 1]
@@ -504,8 +472,8 @@ if __name__ == '__main__':
         if args.tensorboard and main_proc:
             values = {
                 'Avg Train Loss': avg_loss,
-                'Avg WER': wer,
-                'Avg CER': cer
+                'Avg ValLoss': avgValLoss,
+                'Avg CER': 0
             }
             tensorboard_writer.add_scalars(args.id, values, epoch + 1)
             if args.log_params:
@@ -515,7 +483,7 @@ if __name__ == '__main__':
                     tensorboard_writer.add_histogram(tag + '/grad', to_np(value.grad), epoch + 1)
         if args.checkpoint and main_proc:
             file_path = '%s/wav2Letter_%d.pth.tar' % (save_folder, epoch + 1)
-            torch.save(WaveToLetter.serialize(model, optimizer=optimizer, epoch=epoch, loss_results=loss_results,
+            torch.save(CDCK2.serialize(model, optimizer=optimizer, epoch=epoch, loss_results=loss_results,
                                             wer_results=wer_results, cer_results=cer_results),
                        file_path)
         if (epoch + 1) % 1 == 0:
@@ -531,11 +499,11 @@ if __name__ == '__main__':
         # if (best_wer is None or best_wer > wer) and main_proc:
         if main_proc:
             # print("Found better validated model, saving to %s" % args.model_path)
-            torch.save(WaveToLetter.serialize(model, optimizer=optimizer, epoch=epoch, loss_results=loss_results,
+            torch.save(CDCK2.serialize(model, optimizer=optimizer, epoch=epoch, loss_results=loss_results,
                                             wer_results=wer_results, cer_results=cer_results)
                        , args.model_path)
-
-            best_wer = wer
+            #
+            best_wer = 0
 
         avg_loss = 0
 
