@@ -10,13 +10,10 @@ import torch.distributed as dist
 import torch.utils.data.distributed
 from torch.autograd import Variable
 from tqdm import tqdm
-from warpctc_pytorch import CTCLoss
 from apex import amp
 from data_loader import AudioDataLoader, SpectrogramDataset, BucketingSampler, DistributedBucketingSampler
 from data.distributed import DistributedDataParallel
-from decoder import GreedyDecoder
 from modelCPC import CDCK2
-import Levenshtein as Lev
 
 parser = argparse.ArgumentParser(description='Wav2Letter training')
 parser.add_argument('--train-manifest', metavar='DIR',
@@ -24,7 +21,7 @@ parser.add_argument('--train-manifest', metavar='DIR',
 parser.add_argument('--val-manifest', metavar='DIR',
                     help='path to validation manifest csv', default='~/data/validation.csv')
 parser.add_argument('--sample-rate', default=16000, type=int, help='Sample rate')
-parser.add_argument('--timestep', default=4, type=int, help='number of steps to look forward the context and predict the output')
+parser.add_argument('--timestep', default=12, type=int, help='number of steps to look forward the context and predict the output')
 parser.add_argument('--batch-size', default=16, type=int, help='Batch size for training')
 parser.add_argument('--num-workers', default=0, type=int, help='Number of workers used in data-loading')
 parser.add_argument('--labels-path', default='/home/yoda/ML/wav2LetterPytorch/labels.json', help='Contains all characters for transcription')
@@ -34,7 +31,7 @@ parser.add_argument('--window-stride', default=.01, type=float, help='Window str
 parser.add_argument('--window', default='hamming', help='Window type for spectrogram generation')
 parser.add_argument('--epochs', default=200, type=int, help='Number of training epochs')
 parser.add_argument('--cuda', default=True,dest='cuda', action='store_true', help='Use cuda to train model')
-parser.add_argument('--lr', '--learning-rate', default=1e-5, type=float, help='initial learning rate')
+parser.add_argument('--lr', '--learning-rate', default=1e-2, type=float, help='initial learning rate')
 parser.add_argument('--mixPrec',dest='mixPrec',default=False,action='store_true', help='use mix precision for training')
 parser.add_argument('--reg-scale', dest='reg_scale', default=0.9, type=float, help='L2 regularizationScale')
 parser.add_argument('--momentum', default=0.90, type=float, help='momentum')
@@ -104,38 +101,6 @@ class AverageMeter(object):
         self.sum += val * n
         self.count += n
         self.avg = self.sum / self.count
-
-
-def werCalc(s1, s2):
-    """
-    Computes the Word Error Rate, defined as the edit distance between the
-    two provided sentences after tokenizing to words.
-    Arguments:
-        s1 (string): space-separated sentence
-        s2 (string): space-separated sentence
-    """
-
-    # build mapping of words to integers
-    b = set(s1.split() + s2.split())
-    word2char = dict(zip(b, range(len(b))))
-
-    # map the words to a char array (Levenshtein packages only accepts
-    # strings)
-    w1 = [chr(word2char[w]) for w in s1.split()]
-    w2 = [chr(word2char[w]) for w in s2.split()]
-
-    return Lev.distance(''.join(w1), ''.join(w2))
-
-def cerCalc(s1, s2):
-    """
-    Computes the Character Error Rate, defined as the edit distance.
-
-    Arguments:
-        s1 (string): space-separated sentence
-        s2 (string): space-separated sentence
-    """
-    s1, s2, = s1.replace(' ', ''), s2.replace(' ', '')
-    return Lev.distance(s1, s2)
 
 def poly_lr_scheduler(init_lr, iter, lr_decay_iter=1,
                       max_iter=100, power=0.9):
@@ -214,7 +179,6 @@ if __name__ == '__main__':
             print('Model Save directory already exists.')
         else:
             raise
-    criterion = CTCLoss()
 
     avg_loss, start_epoch, start_iter = 0, 0, 0
     if args.continue_from:  # Starting from previous model

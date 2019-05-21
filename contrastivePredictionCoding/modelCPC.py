@@ -151,7 +151,6 @@ class Cov1dBlock(nn.Module):
 
         return output
 
-#TODO try and understand and remove the hard coded values in the forward pass
 class CDCK2(nn.Module):
     def __init__(self, timestep):
 
@@ -247,13 +246,13 @@ class CDCK2(nn.Module):
         # forward_seq = z[:, :t_samples + 1, :]  # e.g. size 8*100*512
 
         output, hidden = self.gru(forward_seq_var.cuda(), hidden)  # output size e.g. 8*100*256
-        seq_perc, maxLen = self.makeTheInputPercUsingSeqLens(batch, t_samples_audios)
-        sizesAfterGru = seq_perc.mul_(int(output.size(1))).int()
+        # seq_perc, maxLen = self.makeTheInputPercUsingSeqLens(batch, t_samples_audios)
+        # sizesAfterGru = seq_perc.mul_(int(output.size(1))).int()
         c_t_var = torch.zeros((batch, 256)).float()
         for batchNum in range(batch):
             t_samples = t_samples_audios[batchNum]
             outputForItem = output[batchNum,:,:] #TODO CHECK this before commit
-            c_t = outputForItem[t_samples-1, :].view(1, 256)  # c_t e.g. size 8*256
+            c_t = outputForItem[t_samples, :].view(1, 256)  # c_t e.g. size 8*256
             c_t_var[batchNum,:] = c_t
         # _,time,nChannels = c_t_var.size()
         # c_t_var = c_t_var.transpose(1,2) # BXCXT
