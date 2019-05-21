@@ -317,7 +317,8 @@ class CDCK2(nn.Module):
         # model = model.module if model_is_cuda else model
         package = {
             'timestep': model.timestep,
-            'version':model._version
+            'version':model._version,
+            'state_dict': model.state_dict()
         }
         if optimizer is not None:
             package['optim_dict'] = optimizer.state_dict()

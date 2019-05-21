@@ -12,7 +12,6 @@ from torch.autograd import Variable
 from tqdm import tqdm
 from apex import amp
 from data_loader import AudioDataLoader, SpectrogramDataset, BucketingSampler, DistributedBucketingSampler
-from data.distributed import DistributedDataParallel
 from modelCPC import CDCK2
 
 parser = argparse.ArgumentParser(description='Wav2Letter training')
@@ -285,8 +284,8 @@ if __name__ == '__main__':
     parameters = model.parameters()
     optimizer = torch.optim.SGD(parameters, lr=args.lr,
                                 momentum=args.momentum, nesterov=True, weight_decay=1e-5)
-    if args.distributed:
-        model = DistributedDataParallel(model)
+    # if args.distributed:
+    #     model = DistributedDataParallel(model)
     # if args.cuda and not args.distributed:
     #     model = torch.nn.DataParallel(model).cuda()
     # elif args.cuda and args.distributed:
