@@ -200,6 +200,8 @@ class SpectrogramParser(AudioParser):
             if add_noise:
                 y = self.noiseInjector.inject_noise(y)
 
+        if y.shape[0]> 20480:
+            y = y[:20480]
         return y,None
 
     def parse_transcript(self, transcript_path):

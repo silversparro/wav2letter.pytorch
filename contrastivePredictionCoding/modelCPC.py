@@ -156,6 +156,7 @@ class CDCK2(nn.Module):
 
         super(CDCK2, self).__init__()
         self.timestep = timestep
+        self.seq_len = 20480
         self._version = '0.0.1'
         self.encoder = nn.Sequential(  # downsampling factor = 160
             nn.Conv1d(1, 512, kernel_size=10, stride=5, padding=3, bias=False),
@@ -213,11 +214,41 @@ class CDCK2(nn.Module):
             seqLen = seq_lens[i].item()
             input_percentages[i] = seqLen/float(maxSeqLen)
         return input_percentages,maxSeqLen
-    def forward(self, x,seq_lens):
+    def forward(self, x, seq_lens):
+        batch = x.size()[0]
+        hidden = torch.zeros(1, batch, 256).cuda()
+        t_samples = torch.randint(int(self.seq_len/160-self.timestep), size=(1,)).long() # randomly pick time stamps
+        # input sequence is N*C*L, e.g. 8*1*20480
+        z = self.encoder(x)
+        # encoded sequence is N*C*L, e.g. 8*512*128
+        # reshape to N*L*C for GRU, e.g. 8*128*512
+        z = z.transpose(1,2)
+        nce = 0 # average over timestep and batch
+        encode_samples = torch.empty((self.timestep,batch,512)).float() # e.g. size 12*8*512
+        for i in np.arange(1, self.timestep+1):
+            encode_samples[i-1] = z[:,t_samples+i,:].view(batch,512) # z_tk e.g. size 8*512
+        forward_seq = z[:,:t_samples+1,:] # e.g. size 8*100*512
+        output, hidden = self.gru(forward_seq, hidden) # output size e.g. 8*100*40
+        c_t = output[:,t_samples,:].view(batch, 256) # c_t e.g. size 8*40
+        pred = torch.empty((self.timestep,batch,512)).float() # e.g. size 12*8*512
+        for i in np.arange(0, self.timestep):
+            decoder = self.Wk[i]
+            pred[i] = decoder(c_t) # Wk*c_t e.g. size 8*512
+        for i in np.arange(0, self.timestep):
+            total = torch.mm(encode_samples[i], torch.transpose(pred[i],0,1)) # e.g. size 8*8
+            correct = torch.sum(torch.eq(torch.argmax(self.softmax(total), dim=0), torch.arange(0, batch))) # correct is a tensor
+            nce += torch.sum(torch.diag(self.lsoftmax(total))) # nce is a tensor
+        nce /= -1.*batch*self.timestep
+        accuracy = 1.*correct.item()/batch
+
+        return accuracy, nce, hidden
+
+    def forwardVAR(self, x,seq_lens):
         batch = x.size()[0]
         hidden = torch.zeros(1, batch, 256).cuda()
         seq_perc,maxLen = self.makeTheInputPercUsingSeqLens(batch,seq_lens)
-
+        #we divide the sequence length by 160 because the downsampling rate of the current enc. network is 160
+        #i.e for every 10ms of audio we have a feature also the sequence length after the encoder will be dec by 160
         t_samples_audios = torch.LongTensor([torch.randint(int((seq_len.item() / 160) - self.timestep), size=(1,)).long() for seq_len in seq_lens])
 
         max_sample_audios = torch.max(t_samples_audios)
