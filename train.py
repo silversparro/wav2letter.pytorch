@@ -15,7 +15,7 @@ from apex import amp
 from data.data_loader import AudioDataLoader, SpectrogramDataset, BucketingSampler, DistributedBucketingSampler
 from data.distributed import DistributedDataParallel
 from decoder import GreedyDecoder
-from model import WaveToLetter
+from model import WaveToLetter,CDCK2
 import Levenshtein as Lev
 
 parser = argparse.ArgumentParser(description='Wav2Letter training')
@@ -52,6 +52,7 @@ parser.add_argument('--save-folder', default='~/models/wave2Letter', help='Locat
 parser.add_argument('--model-path', default='~/models/wave2Letter/wav2Letter_final.pth.tar',
                     help='Location to save best validation model')
 parser.add_argument('--continue-from', default='', help='Continue from checkpoint model')
+parser.add_argument('--cpcModelPath', default='', help='pretrained model path for cpc')
 parser.add_argument('--finetune', default=False,dest='finetune', action='store_true',
                     help='Finetune the model from checkpoint "continue_from"')
 parser.add_argument('--augment', default=False ,dest='augment', action='store_true', help='Use random tempo and gain perturbations.')
@@ -167,6 +168,8 @@ if __name__ == '__main__':
     args.distributed = args.world_size > 1
     main_proc = True
     device = torch.device("cuda" if args.cuda else "cpu")
+    audioEncoderPath = args.cpcModelPath
+
     if args.distributed:
         if args.gpu_rank:
             torch.cuda.set_device(int(args.gpu_rank))
@@ -290,11 +293,21 @@ if __name__ == '__main__':
                           noise_prob=args.noise_prob,
                           noise_levels=(args.noise_min, args.noise_max))
 
+        assert (audioEncoderPath != '' or audioEncoderPath is not None), 'encoder path has to be specified else try the ' \
+                                                                             'trainablefrontend or masater branch!'
+        package = torch.load(audioEncoderPath, map_location=lambda storage, loc: storage)
+        audioEncoder = CDCK2.load_model_package(package)
+
         model = WaveToLetter(labels=labels,
-                           audio_conf=audio_conf,sample_rate=args.sample_rate,window_size=args.window_size,mixed_precision=args.mixPrec)
+                           audio_conf=audio_conf,sample_rate=args.sample_rate,window_size=args.window_size,
+                             encoderModel=audioEncoder,mixed_precision=args.mixPrec)
         # parameters = model.parameters()
         # optimizer = torch.optim.SGD(parameters, lr=args.lr,
         #                             momentum=args.momentum, nesterov=True)
+    #freezing the network layer to stop training of encoder
+
+    for param in model.frontEnd.parameters():
+        param.requires_grad = False
 
     decoder = GreedyDecoder(labels)
 
