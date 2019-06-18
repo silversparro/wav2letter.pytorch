@@ -25,7 +25,7 @@ parser.add_argument('--val-manifest', metavar='DIR',
                     help='path to validation manifest csv', default='~/data/validation.csv')
 parser.add_argument('--sample-rate', default=16000, type=int, help='Sample rate')
 parser.add_argument('--batch-size', default=16, type=int, help='Batch size for training')
-parser.add_argument('--num-workers', default=0, type=int, help='Number of workers used in data-loading')
+parser.add_argument('--num-workers', default=4, type=int, help='Number of workers used in data-loading')
 parser.add_argument('--labels-path', default='labels.json', help='Contains all characters for transcription')
 parser.add_argument('--window-size', default=.02, type=float, help='Window size for spectrogram in seconds')
 parser.add_argument('--peak-normalization',dest='peak_normalization', default=False, action='store_true', help='Apply peak normalization while training and validation')
@@ -51,8 +51,8 @@ parser.add_argument('--id', default='Wav2Letter training', help='Identifier for 
 parser.add_argument('--save-folder', default='~/models/wave2Letter', help='Location to save epoch models')
 parser.add_argument('--model-path', default='~/models/wave2Letter/wav2Letter_final.pth.tar',
                     help='Location to save best validation model')
-parser.add_argument('--continue-from', default='', help='Continue from checkpoint model')
-parser.add_argument('--cpcModelPath', default='', help='pretrained model path for cpc')
+parser.add_argument('--continue-from', default='/media/yoda/gargantua/data_pb/models/customer/trainUsingCPCFrontEnd/wav2Letter_1.pth.tar', help='Continue from checkpoint model')
+parser.add_argument('--cpcModelPath', default='/media/yoda/gargantua/data_pb/models/agent/cpc/wav2Letter_19.pth.tar', help='pretrained model path for cpc')
 parser.add_argument('--finetune', default=False,dest='finetune', action='store_true',
                     help='Finetune the model from checkpoint "continue_from"')
 parser.add_argument('--augment', default=False ,dest='augment', action='store_true', help='Use random tempo and gain perturbations.')

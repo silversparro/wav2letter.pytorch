@@ -214,6 +214,7 @@ class CDCK2(nn.Module):
             seqLen = seq_lens[i].item()
             input_percentages[i] = seqLen/float(maxSeqLen)
         return input_percentages,maxSeqLen
+
     def forward(self, x, seq_lens):
         batch = x.size()[0]
         hidden = torch.zeros(1, batch, 256).cuda()

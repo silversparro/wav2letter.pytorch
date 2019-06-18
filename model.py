@@ -162,15 +162,15 @@ class CDCK2(nn.Module):
 
     def predict(self, x):
         batch = x.size()[0]
-        hidden = torch.zeros(1, batch, 256).cuda()
+        # hidden = torch.zeros(1, batch, 256).cuda()
         # input sequence is N*C*L, e.g. 8*1*20480
         z = self.encoder(x)
         # encoded sequence is N*C*L, e.g. 8*512*128
         # reshape to N*L*C for GRU, e.g. 8*128*512
-        z = z.transpose(1, 2)
-        output, hidden = self.gru(z, hidden)  # output size e.g. 8*128*256
+        # z = z.transpose(1, 2)
+        # output, hidden = self.gru(z, hidden)  # output size e.g. 8*128*256
 
-        return output, hidden
+        return z, None
 
     @classmethod
     def load_model(cls, path, cuda=False):
@@ -400,8 +400,8 @@ class WaveToLetter(nn.Module):
         self.mixed_precision=mixed_precision
 
         nfft = (self._sample_rate * self._window_size)
-        input_size = 256
-        hop_length = sample_rate * self._audio_conf.get("window_stride", 0.01)
+        # input_size = 250
+        # hop_length = sample_rate * self._audio_conf.get("window_stride", 0.01)
 
         # self.pcen = PCEN()
         # self.frontEnd = stft(hop_length=int(hop_length), nfft=int(nfft))
@@ -409,7 +409,7 @@ class WaveToLetter(nn.Module):
         # conv1 =  Cov1dBlock(input_size=input_size,output_size=256,kernal_size=(11,),stride=2,dilation=1,drop_out_prob=0.2,padding='same')
         conv2s = []
         # conv2s.append(('conv1d_{}'.format(0),conv1))
-        inputSize = 256
+        inputSize = 512
         for idx in range(15):
             layergroup = idx//3
             if (layergroup) == 0:
@@ -450,8 +450,8 @@ class WaveToLetter(nn.Module):
         self.inference_softmax = InferenceBatchSoftmax()
 
     def forward(self, x):
-        x = self.frontEnd.predict(x)
-        x = x.squeeze(1)
+        x = self.frontEnd.predict(x)[0]
+        # x = x.transpose(1,2)
         x = self.conv1ds(x)
         x = x.transpose(1,2)
         x = self.inference_softmax(x)
@@ -461,8 +461,8 @@ class WaveToLetter(nn.Module):
     @classmethod
     def load_model(cls, path, cuda=False):
         package = torch.load(path, map_location=lambda storage, loc: storage)
-        model = cls(labels=package['labels'], audio_conf=package['audio_conf'],sample_rate=package["sample_rate"]
-                    ,window_size=package["window_size"],mixed_precision=package.get('mixed_precision',False),
+        model = cls(labels=package['labels'], audio_conf=package['audio_conf'],sample_rate=8000
+                    ,window_size=0.02,mixed_precision=package.get('mixed_precision',False),
                     encoderModel=package["encoderModel"])
         # the blacklist parameters are params that were previous erroneously saved by the model
         # care should be taken in future versions that if batch_norm on the first rnn is required
@@ -487,8 +487,8 @@ class WaveToLetter(nn.Module):
 
     @classmethod
     def load_model_package(cls, package, cuda=False):
-        model = cls(labels=package['labels'], audio_conf=package['audio_conf'],sample_rate=package["sample_rate"]
-                    ,window_size=package["window_size"],mixed_precision=package.get('mixed_precision',False),
+        model = cls(labels=package['labels'], audio_conf=package['audio_conf'],sample_rate=8000
+                    ,window_size=0.02,mixed_precision=package.get('mixed_precision',False),
                     encoderModel=package["encoderModel"])
         model.load_state_dict(package['state_dict'])
         if cuda:
