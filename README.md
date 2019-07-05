@@ -192,4 +192,4 @@ For example, based on default parameters you could multiply the offsets by a sca
 ## Acknowledgements
 
 This work is inspired from the [deepspeech.pytorch](https://github.com/SeanNaren/deepspeech.pytorch) repository of [Sean Naren](https://github.com/SeanNaren). 
-This work was done as a part of [Silversparro](www.silversparro.com) project work regarding speech to text. 
+This work was done as a part of [Silversparro](https://www.silversparro.com) project work regarding speech to text. 
