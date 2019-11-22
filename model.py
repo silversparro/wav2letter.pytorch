@@ -94,14 +94,19 @@ class Cov1dBlock(nn.Module):
     def forward(self, xs, hid=None):
         if self.paddingAdded is not None:
             xs = self.paddingAdded(xs)
-        output = self.conv1(xs)
-        if self.batchNorm is not None:
-            output = self.batchNorm(output)
+        fusedLayer = getattr(self,'fusedLayer',None)
+        if fusedLayer is not None:
+            output = fusedLayer(xs)
+        else:
+            output = self.conv1(xs)
+            if self.batchNorm is not None:
+                output = self.batchNorm(output)
         if self.activationUse:
             output = torch.clamp(input=output,min=0,max=20)
             # output = self.activation(output)
-        if self.drop_out_layer is not None:
-            output = self.drop_out_layer(output)
+        if self.training:
+            if self.drop_out_layer is not None:
+                output = self.drop_out_layer(output)
 
         return output
 
@@ -179,8 +184,8 @@ class WaveToLetter(nn.Module):
     @classmethod
     def load_model(cls, path, cuda=False):
         package = torch.load(path, map_location=lambda storage, loc: storage)
-        model = cls(labels=package['labels'], audio_conf=package['audio_conf'],sample_rate=package["sample_rate"]
-                    ,window_size=package["window_size"],mixed_precision=package.get('mixed_precision',False))
+        model = cls(labels=package['labels'], audio_conf=package['audio_conf'],sample_rate=package.get('sample_rate',8000)
+                    ,window_size=package.get('window_size',0.02),mixed_precision=package.get('mixed_precision',False))
         # the blacklist parameters are params that were previous erroneously saved by the model
         # care should be taken in future versions that if batch_norm on the first rnn is required
         # that it be named something else
@@ -204,8 +209,8 @@ class WaveToLetter(nn.Module):
 
     @classmethod
     def load_model_package(cls, package, cuda=False):
-        model = cls(labels=package['labels'], audio_conf=package['audio_conf'],sample_rate=package["sample_rate"]
-                    ,window_size=package["window_size"],mixed_precision=package.get('mixed_precision',False))
+        model = cls(labels=package['labels'], audio_conf=package['audio_conf'],sample_rate=package.get('sample_rate',8000)
+                    ,window_size=package.get('window_size',0.02),mixed_precision=package.get('mixed_precision',False))
         model.load_state_dict(package['state_dict'])
         if cuda:
             model = torch.nn.DataParallel(model).cuda()
@@ -221,7 +226,9 @@ class WaveToLetter(nn.Module):
             'audio_conf': model._audio_conf,
             'labels': model._labels,
             'state_dict': model.state_dict(),
-            'mixed_precision': model.mixed_precision
+            'mixed_precision': model.mixed_precision,
+            'sample_rate': model._sample_rate,
+            'window_size': model._window_size
         }
         if optimizer is not None:
             package['optim_dict'] = optimizer.state_dict()
@@ -278,6 +285,58 @@ class WaveToLetter(nn.Module):
             "version": m._version
         }
         return meta
+
+    def fuse_model(self):
+        for m in self.modules():
+            if type(m) == Cov1dBlock:
+                torch.quantization.fuse_modules(m, [ 'conv1','batchNorm'], inplace=True)
+            # if type(m) == InvertedResidual:
+            #     for idx in range(len(m.conv)):
+            #         if type(m.conv[idx]) == nn.Conv2d:
+            #             torch.quantization.fuse_modules(m.conv, [str(idx), str(idx + 1)], inplace=True)
+
+    def convertTensorType(self,dtypeToUse=torch.float16):
+        module = self._modules
+        layermodules = module['conv1ds']
+        # for layermodule in layermodules:
+        convLayerPrefix = 'conv1d_{}'
+
+        for i in range(0,19):
+            convLayer = getattr(layermodules,convLayerPrefix.format(i))
+            modulesconv = convLayer._modules
+            if 'batchNorm' in modulesconv:
+                fusedLayer = self.fuse_conv_and_bn(modulesconv['conv1']._modules['0'],modulesconv['batchNorm'])
+                setattr(convLayer,'fusedLayer',fusedLayer)
+        return
+
+    def fuse_conv_and_bn(self,conv, bn):
+        #
+        # init
+        fusedconv = torch.nn.Conv1d(
+            conv.in_channels,
+            conv.out_channels,
+            kernel_size=conv.kernel_size,
+            stride=conv.stride,
+            padding=0,
+            dilation=conv.dilation,
+            bias=True
+        )
+        #
+        # prepare filters
+        w_conv = conv.weight.clone().view(conv.out_channels, -1)
+        w_bn = torch.diag(bn.weight.div(torch.sqrt(bn.eps + bn.running_var)))
+        fusedconv.weight.copy_(torch.mm(w_bn, w_conv).view(fusedconv.weight.size()))
+        #
+        # prepare spatial bias
+        if conv.bias is not None:
+            b_conv = conv.bias
+        else:
+            b_conv = torch.zeros(conv.weight.size(0))
+        b_bn = bn.bias - bn.weight.mul(bn.running_mean).div(torch.sqrt(bn.running_var + bn.eps))
+        fusedconv.bias.copy_(b_conv + b_bn)
+        #
+        # we're done
+        return fusedconv
 
 if __name__ == '__main__':
     pass
