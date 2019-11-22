@@ -94,6 +94,13 @@ python train.py --tensorboard --logdir log_dir/ # Make sure the Tensorboard inst
 
 For both visualisation tools, you can add your own name to the run by changing the `--id` parameter when training.
 
+##Testing
+For testing write all the file path into a csv and run
+```
+python test.py
+```
+PS : for speed improvements try to run test.py with the flag '--fuse-layers'. This option will fuse all the conv-bn operation and increase the model inference speed.
+
 ### Noise Augmentation/Injection
 
 There is support for two different types of noise; noise augmentation and noise injection.

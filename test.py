@@ -18,7 +18,8 @@ parser.add_argument('--cuda', default=True, action="store_true", help='Use cuda 
 parser.add_argument('--test-manifest', metavar='DIR',
                     help='path to validation manifest csv', default='~/data/validation.csv')
 parser.add_argument('--batch-size', default=10, type=int, help='Batch size for training')
-parser.add_argument('--fuse-layers', default=False, action="store_true", help='Batch size for training')
+parser.add_argument('--fuse-layers', default=False, action="store_true"
+					, help='if True then combine all the CONV-BN layer to increase the speed of network. W/o Decreasing the accuracy.')
 parser.add_argument('--num-workers', default=0, type=int, help='Number of workers used in dataloading')
 parser.add_argument('--decoder', default="greedy", choices=["greedy", "beam", "none"], type=str, help="Decoder to use")
 parser.add_argument('--verbose', default=True, action="store_true", help="print out decoded output and error of each sample")
