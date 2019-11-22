@@ -95,6 +95,7 @@ python train.py --tensorboard --logdir log_dir/ # Make sure the Tensorboard inst
 For both visualisation tools, you can add your own name to the run by changing the `--id` parameter when training.
 
 ##Testing
+
 For testing write all the file path into a csv and run
 ```
 python test.py
