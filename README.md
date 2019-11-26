@@ -92,6 +92,11 @@ There is also [Tensorboard](https://github.com/lanpa/tensorboard-pytorch) suppor
 python train.py --tensorboard --logdir log_dir/ # Make sure the Tensorboard instance is made pointing to this log directory
 ```
 
+## MultiGpu support
+```
+python -m multiproc train.py --visdom --cuda # Add your parameters as normal, multiproc will scale to all GPUs automatically
+```
+
 For both visualisation tools, you can add your own name to the run by changing the `--id` parameter when training.
 
 ## Testing
