@@ -43,15 +43,15 @@ parser.add_argument('--max-norm', default=400, type=int, help='Norm cutoff to pr
 parser.add_argument('--learning-anneal', default=1.2, type=float, help='Annealing applied to learning rate every epoch')
 parser.add_argument('--silent', dest='silent', action='store_true', help='Turn off progress tracking per iteration')
 parser.add_argument('--checkpoint', default=True,dest='checkpoint', action='store_true', help='Enables checkpoint saving of model')
-parser.add_argument('--checkpoint-per-batch', default=0, type=int, help='Save checkpoint per batch. 0 means never save')
+parser.add_argument('--checkpoint-per-batch', default=5000, type=int, help='Save checkpoint per batch. 0 means never save')
 parser.add_argument('--visdom', dest='visdom', action='store_true', help='Turn on visdom graphing')
-parser.add_argument('--tensorboard', default=False,dest='tensorboard', action='store_true', help='Turn on tensorboard graphing')
+parser.add_argument('--tensorboard', default=True,dest='tensorboard', action='store_true', help='Turn on tensorboard graphing')
 parser.add_argument('--log-dir', default='visualize/w2lOnMozillaDataAftr118Epch', help='Location of tensorboard log')
 parser.add_argument('--log-params', dest='log_params', action='store_true', help='Log parameter values and gradients')
 parser.add_argument('--seed', default=1234 )
 parser.add_argument('--id', default='Wav2Letter training', help='Identifier for visdom/tensorboard run')
-parser.add_argument('--save-folder', default='/media/yoda/gargantua/data_pb/models/wav2letterASG', help='Location to save epoch models')
-parser.add_argument('--model-path', default='/media/yoda/gargantua/data_pb/models/wav2letterASG/wav2Letter_final.pth.tar',
+parser.add_argument('--save-folder', default='~/models/wave2Letter', help='Location to save epoch models')
+parser.add_argument('--model-path', default='~/models/wave2Letter/wav2Letter_final.pth.tar',
                     help='Location to save best validation model')
 parser.add_argument('--continue-from', default='', help='Continue from checkpoint model')
 parser.add_argument('--finetune', default=False,dest='finetune', action='store_true',
