@@ -12,17 +12,17 @@ import torch.quantization
 np.random.seed(123456)
 
 parser = argparse.ArgumentParser(description='Wav2Letter transcription')
-parser.add_argument('--model-path', default='~/models/wave2Letter/wav2Letter_final.pth.tar',
+parser.add_argument('--model-path', default='/media/yoda/gargantua/data_pb/models/agent/wave2Letter39WERWithGreedyDecoder/deepspeech2_final.pth.tar',
                     help='Path to model file created by training')
 parser.add_argument('--cuda', default=True, action="store_true", help='Use cuda to test model')
 parser.add_argument('--test-manifest', metavar='DIR',
-                    help='path to validation manifest csv', default='~/data/validation.csv')
+                    help='path to validation manifest csv', default='/media/evaData/clientData/pb/speechRecognition/trainingFiles/agent/valSubSet.csv')
 parser.add_argument('--batch-size', default=10, type=int, help='Batch size for training')
-parser.add_argument('--fuse-layers', default=False, action="store_true"
+parser.add_argument('--fuse-layers', default=True, action="store_true"
 					, help='if True then combine all the CONV-BN layer to increase the speed of network. W/o Decreasing the accuracy.')
 parser.add_argument('--num-workers', default=0, type=int, help='Number of workers used in dataloading')
 parser.add_argument('--decoder', default="greedy", choices=["greedy", "beam", "none"], type=str, help="Decoder to use")
-parser.add_argument('--verbose', default=True, action="store_true", help="print out decoded output and error of each sample")
+parser.add_argument('--verbose', default=False, action="store_true", help="print out decoded output and error of each sample")
 no_decoder_args = parser.add_argument_group("No Decoder Options", "Configuration options for when no decoder is "
                                                                   "specified")
 no_decoder_args.add_argument('--output-path', default=None, type=str, help="Where to save raw acoustic output")

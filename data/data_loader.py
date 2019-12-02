@@ -295,7 +295,7 @@ def _collate_fn(batch):
     target_sizes = torch.IntTensor(minibatch_size)
     targets = []
     inputFilePathAndTranscription = []
-
+    maxTargetLen = -1
     for x in range(minibatch_size):
         sample = batch[x]
         tensor = sample[0]
@@ -316,12 +316,20 @@ def _collate_fn(batch):
         inputs[x].copy_(torch.FloatTensor(tensorNew))
         input_percentages[x] = seq_length / float(max_seqlength)
         target_sizes[x] = len(target)
-        targets.extend(target)
+        targets.append(target)
+        if len(target)>maxTargetLen:
+            maxTargetLen = len(target)
         sumValueForInput = 0#sum(sum(tensor))
         sumValueForInputMag = 0#sum(sum(tensorMag))
         inputFilePathAndTranscription.append([tensorPath,orignalTranscription,sumValueForInput,sumValueForInputMag,tensorShape[0]])
     numChars = len(targets)
-    targets = torch.IntTensor(targets)
+    newTarget = []
+    for target in targets:
+        if len(target) < maxTargetLen:
+            extraTarget = [-1] * (maxTargetLen-len(target))
+            target.extend(extraTarget)
+        newTarget.append(target)
+    targets = torch.IntTensor(newTarget)
     # inputFilePath = torch.IntTensor(inputFilePath)
     return inputs, targets, input_percentages, target_sizes, inputFilePathAndTranscription, inputsMags
 

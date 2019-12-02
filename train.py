@@ -17,6 +17,7 @@ from data.distributed import DistributedDataParallel
 from decoder import GreedyDecoder
 from model import WaveToLetter
 import Levenshtein as Lev
+from wav2letter.criterion import ASGLoss,CriterionScaleMode
 
 parser = argparse.ArgumentParser(description='Wav2Letter training')
 parser.add_argument('--train-manifest', metavar='DIR',
@@ -42,15 +43,15 @@ parser.add_argument('--max-norm', default=400, type=int, help='Norm cutoff to pr
 parser.add_argument('--learning-anneal', default=1.2, type=float, help='Annealing applied to learning rate every epoch')
 parser.add_argument('--silent', dest='silent', action='store_true', help='Turn off progress tracking per iteration')
 parser.add_argument('--checkpoint', default=True,dest='checkpoint', action='store_true', help='Enables checkpoint saving of model')
-parser.add_argument('--checkpoint-per-batch', default=5000, type=int, help='Save checkpoint per batch. 0 means never save')
+parser.add_argument('--checkpoint-per-batch', default=0, type=int, help='Save checkpoint per batch. 0 means never save')
 parser.add_argument('--visdom', dest='visdom', action='store_true', help='Turn on visdom graphing')
-parser.add_argument('--tensorboard', default=True,dest='tensorboard', action='store_true', help='Turn on tensorboard graphing')
+parser.add_argument('--tensorboard', default=False,dest='tensorboard', action='store_true', help='Turn on tensorboard graphing')
 parser.add_argument('--log-dir', default='visualize/w2lOnMozillaDataAftr118Epch', help='Location of tensorboard log')
 parser.add_argument('--log-params', dest='log_params', action='store_true', help='Log parameter values and gradients')
 parser.add_argument('--seed', default=1234 )
 parser.add_argument('--id', default='Wav2Letter training', help='Identifier for visdom/tensorboard run')
-parser.add_argument('--save-folder', default='~/models/wave2Letter', help='Location to save epoch models')
-parser.add_argument('--model-path', default='~/models/wave2Letter/wav2Letter_final.pth.tar',
+parser.add_argument('--save-folder', default='/media/yoda/gargantua/data_pb/models/wav2letterASG', help='Location to save epoch models')
+parser.add_argument('--model-path', default='/media/yoda/gargantua/data_pb/models/wav2letterASG/wav2Letter_final.pth.tar',
                     help='Location to save best validation model')
 parser.add_argument('--continue-from', default='', help='Continue from checkpoint model')
 parser.add_argument('--finetune', default=False,dest='finetune', action='store_true',
@@ -167,7 +168,7 @@ if __name__ == '__main__':
         raise ValueError('If using mixed precision training, CUDA must be enabled!')
     args.distributed = args.world_size > 1
     main_proc = True
-    device = torch.device("cuda" if args.cuda else "cpu")
+    # device = torch.device("cuda" if args.cuda else "cpu")
     if args.distributed:
         if args.gpu_rank:
             torch.cuda.set_device(int(args.gpu_rank))
@@ -214,7 +215,7 @@ if __name__ == '__main__':
             print('Model Save directory already exists.')
         else:
             raise
-    criterion = CTCLoss()
+    # criterion = CTCLoss()
 
     avg_loss, start_epoch, start_iter = 0, 0, 0
     if args.continue_from:  # Starting from previous model
@@ -304,6 +305,7 @@ if __name__ == '__main__':
     test_dataset = SpectrogramDataset(audio_conf=audio_conf, manifest_filepath=args.val_manifest, labels=labels,
                                       normalize=True, peak_normalization=args.peak_normalization, augment=False)
 
+    criterion = ASGLoss(len(labels), scale_mode=CriterionScaleMode.TARGET_SZ_SQRT).to(device)
     if not args.distributed:
         train_sampler = BucketingSampler(train_dataset, batch_size=args.batch_size)
     else:
@@ -352,12 +354,13 @@ if __name__ == '__main__':
             if i == len(train_sampler):
                 break
             inputs, targets, input_percentages, target_sizes, inputFilePaths, inputsMags = data
+            grad = torch.ones(inputsMags.size()[0], dtype=torch.float16, device=device)
             globalStep +=1
             if not args.pcen:
                 inputsMags = inputs
             # measure data loading time
             data_time.update(time.time() - end)
-            inputsMags = Variable(inputsMags, requires_grad=False)
+            inputsMags = Variable(inputsMags, requires_grad=True)
             target_sizes = Variable(target_sizes, requires_grad=False)
             targets = Variable(targets, requires_grad=False)
             inputsMags = inputsMags.to(device)
@@ -366,13 +369,13 @@ if __name__ == '__main__':
                 # targets = targets.cuda()
                 # target_sizes= target_sizes.cuda()
             out = model(inputsMags)
-            out = out.transpose(0, 1)  # TxNxH
+            # out = out.transpose(0, 1)  # TxNxH
 
             seq_length = out.size(0)
             sizes = Variable(input_percentages.mul_(int(seq_length)).int(), requires_grad=False)
 
-            out = out.cpu()
-            loss = criterion(out, targets, sizes, target_sizes)
+            # out = out.cpu()
+            loss = criterion(out, targets,target_sizes)
             loss = loss / inputs.size(0)  # average the loss by minibatch
             loss_sum = loss.data.sum()
             inf = float("inf")
@@ -393,7 +396,7 @@ if __name__ == '__main__':
                     scaled_loss.backward()
                 optimizer.clip_master_grads(args.max_norm)
             else:
-                loss.backward()
+                loss.backward(grad)
                 torch.nn.utils.clip_grad_norm_(model.parameters(), args.max_norm)
             # SGD step
             optimizer.step()
@@ -451,7 +454,9 @@ if __name__ == '__main__':
                 # unflatten targets
                 split_targets = []
                 offset = 0
-                for size in target_sizes:
+                target_strings = []
+                for idxInp,size in enumerate(target_sizes):
+                    target_strings.append(inputFilePaths[idxInp][1])
                     split_targets.append(targets[offset:offset + size])
                     offset += size
 
@@ -463,11 +468,11 @@ if __name__ == '__main__':
                 sizes = input_percentages.mul_(int(seq_length)).int()
 
                 decoded_output, _ = decoder.decode(out.data, sizes)
-                target_strings = decoder.convert_to_strings(split_targets)
+                # target_strings = decoder.convert_to_strings(split_targets)
 
                 wer, cer = 0, 0
                 for x in range(len(target_strings)):
-                    transcript, reference = decoded_output[x][0], target_strings[x][0]
+                    transcript, reference = decoded_output[x][0], target_strings[x]
                     print ('transcript : {}, reference :{} , filePath : {}'.format(transcript,reference,inputFilePaths[x][0]))
                     # print 'reference : {}'.format(reference)
                     try:

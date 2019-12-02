@@ -219,14 +219,13 @@ class WaveToLetter(nn.Module):
     @staticmethod
     def serialize(model, optimizer=None, epoch=None, iteration=None, loss_results=None,
                   cer_results=None, wer_results=None, avg_loss=None, meta=None):
-        model_is_cuda = next(model.parameters()).is_cuda
-        model = model.module if model_is_cuda else model
+        # model_is_cuda = next(model.parameters()).is_cuda
+        # model = model.module if model_is_cuda else model
         package = {
             'version': model._version,
             'audio_conf': model._audio_conf,
             'labels': model._labels,
             'state_dict': model.state_dict(),
-            'mixed_precision': model.mixed_precision,
             'sample_rate': model._sample_rate,
             'window_size': model._window_size
         }
