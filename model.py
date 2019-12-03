@@ -181,6 +181,11 @@ class WaveToLetter(nn.Module):
 
         return x
 
+    def getLabelDict(self):
+        d=[]
+        for idx,charc in enumerate(self._labels):
+            d.append(str(idx))
+        return d
     @classmethod
     def load_model(cls, path, cuda=False):
         package = torch.load(path, map_location=lambda storage, loc: storage)

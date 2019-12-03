@@ -4,7 +4,7 @@ import json
 import os
 import random
 import time
-
+from torch.autograd import grad
 import numpy as np
 import torch.distributed as dist
 import torch.utils.data.distributed
@@ -43,15 +43,15 @@ parser.add_argument('--max-norm', default=400, type=int, help='Norm cutoff to pr
 parser.add_argument('--learning-anneal', default=1.2, type=float, help='Annealing applied to learning rate every epoch')
 parser.add_argument('--silent', dest='silent', action='store_true', help='Turn off progress tracking per iteration')
 parser.add_argument('--checkpoint', default=True,dest='checkpoint', action='store_true', help='Enables checkpoint saving of model')
-parser.add_argument('--checkpoint-per-batch', default=5000, type=int, help='Save checkpoint per batch. 0 means never save')
+parser.add_argument('--checkpoint-per-batch', default=0, type=int, help='Save checkpoint per batch. 0 means never save')
 parser.add_argument('--visdom', dest='visdom', action='store_true', help='Turn on visdom graphing')
-parser.add_argument('--tensorboard', default=True,dest='tensorboard', action='store_true', help='Turn on tensorboard graphing')
+parser.add_argument('--tensorboard', default=False,dest='tensorboard', action='store_true', help='Turn on tensorboard graphing')
 parser.add_argument('--log-dir', default='visualize/w2lOnMozillaDataAftr118Epch', help='Location of tensorboard log')
 parser.add_argument('--log-params', dest='log_params', action='store_true', help='Log parameter values and gradients')
 parser.add_argument('--seed', default=1234 )
 parser.add_argument('--id', default='Wav2Letter training', help='Identifier for visdom/tensorboard run')
-parser.add_argument('--save-folder', default='~/models/wave2Letter', help='Location to save epoch models')
-parser.add_argument('--model-path', default='~/models/wave2Letter/wav2Letter_final.pth.tar',
+parser.add_argument('--save-folder', default='/media/yoda/gargantua/data_pb/models/wav2letterASG', help='Location to save epoch models')
+parser.add_argument('--model-path', default='/media/yoda/gargantua/data_pb/models/wav2letterASG/wav2Letter_final.pth.tar',
                     help='Location to save best validation model')
 parser.add_argument('--continue-from', default='', help='Continue from checkpoint model')
 parser.add_argument('--finetune', default=False,dest='finetune', action='store_true',
@@ -152,6 +152,41 @@ def poly_lr_scheduler(init_lr, iter, lr_decay_iter=1,
         return 0
     lr = init_lr*(1 - float(iter)/float(max_iter))**power
     return lr
+
+def replabel_symbol(i):
+    """
+    Replabel symbols used in wav2letter, currently just "1", "2", ...
+    This prevents training with numeral tokens, so this might change in the future
+    """
+    return str(i)
+
+def pack_replabels(tokens, dictionary, max_reps=2):
+    """
+    Pack a token sequence so that repeated symbols are replaced by replabels
+    dictionary = {index:charac}
+    """
+    if len(tokens) == 0 or max_reps <= 0:
+        return tokens
+
+    replabel_value_to_idx = [0] * (max_reps + 1)
+    for i in range(1, max_reps + 1):
+        replabel_value_to_idx[i] = dictionary.index(replabel_symbol(i))
+
+    result = []
+    prev_token = -1
+    num_reps = 0
+    for token in tokens:
+        if token == prev_token and num_reps < max_reps:
+            num_reps += 1
+        else:
+            if num_reps > 0:
+                result.append(replabel_value_to_idx[num_reps])
+                num_reps = 0
+            result.append(token)
+            prev_token = token
+    if num_reps > 0:
+        result.append(replabel_value_to_idx[num_reps])
+    return result
 
 
 if __name__ == '__main__':
@@ -342,6 +377,7 @@ if __name__ == '__main__':
     data_time = AverageMeter()
     losses = AverageMeter()
     globalStep = 0
+    tgt_dict = model.getLabelDict()
     for epoch in range(start_epoch, args.epochs):
         torch.cuda.empty_cache()
         if not args.no_shuffle:
@@ -354,39 +390,76 @@ if __name__ == '__main__':
             if i == len(train_sampler):
                 break
             inputs, targets, input_percentages, target_sizes, inputFilePaths, inputsMags = data
-            grad = torch.ones(inputsMags.size()[0], dtype=torch.float16, device=device)
+            gradO = torch.ones(inputsMags.size()[0], dtype=torch.float16, device=device)
             globalStep +=1
             if not args.pcen:
                 inputsMags = inputs
             # measure data loading time
             data_time.update(time.time() - end)
-            inputsMags = Variable(inputsMags, requires_grad=True)
+            inputsMags = inputsMags
             target_sizes = Variable(target_sizes, requires_grad=False)
             targets = Variable(targets, requires_grad=False)
+            inputsMags = Variable(inputsMags, requires_grad=False)
             inputsMags = inputsMags.to(device)
-            # if args.cuda:
-            #     inputsMags = inputsMags.cuda()
-                # targets = targets.cuda()
-                # target_sizes= target_sizes.cuda()
             out = model(inputsMags)
-            # out = out.transpose(0, 1)  # TxNxH
+            B = out.size(0)
+            T = out.size(1)
 
-            seq_length = out.size(0)
-            sizes = Variable(input_percentages.mul_(int(seq_length)).int(), requires_grad=False)
+            # target = torch.IntTensor(B, T)
+            # # out = out.transpose(0, 1)  # TxNxH
+            # target_size = torch.IntTensor(B)
+            # using_linseg = self.linseg_step()
+            # out= out.cpu()
+            # for b in range(B):
+            #     initial_target_size = target_sizes[b].item()
+            #     if initial_target_size == 0:
+            #         raise ValueError("target size cannot be zero")
+			#
+            #     tgt = targets[b, :initial_target_size].tolist()
+            #     tgt = tgt[:-1]
+            #     tgt = pack_replabels(tgt, tgt_dict)
+            #     tgt = tgt[:T]
+			#
+            #     # if using_linseg:
+            #     #     tgt = [tgt[t * len(tgt) // T] for t in range(T)]
+            #     if len(tgt) == 0:
+            #         tgt = targets[b, :initial_target_size].tolist()
+            #         target[b][: len(tgt)] = torch.IntTensor(tgt)
+            #         target_size[b] = len(tgt)
+            #     else:
+            #         target[b][: len(tgt)] = torch.IntTensor(tgt)
+            #         target_size[b] = len(tgt)
+                # target[b][: len(tgt)] = torch.IntTensor(tgt)
+                # target_size[b] = len(tgt)
+
+            # try:
+            loss = criterion.forward(out, targets.to(device), target_sizes.to(device))
+            # print (loss.data)
+            # seq_length = out.size(0)
+            # sizes = Variable(input_percentages.mul_(int(seq_length)).int(), requires_grad=False)
 
             # out = out.cpu()
-            loss = criterion(out, targets,target_sizes)
-            loss = loss / inputs.size(0)  # average the loss by minibatch
+            # loss = criterion(out, targets,target_sizes)
+            # loss = loss / inputs.size(0)  # average the loss by minibatch
             loss_sum = loss.data.sum()
             inf = float("inf")
 
+            # try:
             if loss_sum == inf or loss_sum == -inf:
                 print("WARNING: received an inf loss, setting loss value to 0")
                 loss_value = 0
             else:
                 loss_value = loss.data[0]
-
-
+                # except Exception as e:
+                    # print(e)
+                    # continue
+            # except Exception as e:
+                # print(e)
+                # continue
+            # gradI = []
+            # for i in range(inputsMags.size()[0]):
+            #     gradO = grad(outputs=out[i], inputs=inputsMags[i])
+            #     gradI.append(gradO)
             avg_loss += loss_value
             losses.update(loss_value, inputs.size(0))
             # compute gradient
@@ -396,7 +469,7 @@ if __name__ == '__main__':
                     scaled_loss.backward()
                 optimizer.clip_master_grads(args.max_norm)
             else:
-                loss.backward(grad)
+                loss.backward(loss.data)
                 torch.nn.utils.clip_grad_norm_(model.parameters(), args.max_norm)
             # SGD step
             optimizer.step()
