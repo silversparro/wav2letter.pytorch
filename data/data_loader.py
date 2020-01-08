@@ -11,7 +11,7 @@ import librosa
 import numpy as np
 import scipy.signal
 import torch
-import torchaudio
+from scipy.io.wavfile import read
 import math
 from torch.utils.data import DataLoader
 from torch.utils.data import Dataset
@@ -22,8 +22,8 @@ windows = {'hamming': scipy.signal.hamming, 'hann': scipy.signal.hann, 'blackman
 
 
 def load_audio(path):
-    sound, _ = torchaudio.load(path, normalization=True)
-    sound = sound.numpy().T
+    sample_rate, sound = read(path)
+    sound = sound.astype('float32') / 32767  # normalize audio
     if len(sound.shape) > 1:
         if sound.shape[1] == 1:
             sound = sound.squeeze()
@@ -234,18 +234,19 @@ class SpectrogramDataset(Dataset, SpectrogramParser):
     def __getitem__(self, index):
         sample = self.ids[index]
         audio_path, transcriptLoaded = sample[0], sample[-1]
-        transcriptToUse=transcriptLoaded
+        # transcriptToUse=transcriptLoaded
         if self.w2l2:
             spect,magnitudeOfAudio = self.parse_audio_w2l2(audio_path)
         else:
             spect, magnitudeOfAudio = self.parse_audio(audio_path)
-        transcript = list(filter(None, [self.labels_map.get(x) for x in list(transcriptToUse)]))
+        transcript = self.parse_transcript(transcriptLoaded)
+        transcriptToUse = transcript
         return spect, transcript, magnitudeOfAudio, audio_path, transcriptToUse
 
     def parse_transcript(self, transcript_path):
         with open(transcript_path, 'r') as transcript_file:
             transcript = transcript_file.read().replace('\n', '')
-        transcript = list(filter(None, [self.labels_map.get(x) for x in list(transcript)]))
+        transcript = list(filter(None, [self.labels_map.get(x.lower()) for x in list(transcript)]))
         return transcript
 
     def __len__(self):
