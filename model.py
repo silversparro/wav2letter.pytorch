@@ -1,10 +1,56 @@
 import math
 from collections import OrderedDict
-
+import numpy as np
+import scipy.signal
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.nn.parameter import Parameter
+
+
+class stft(nn.Module):
+    def __init__(self, nfft=1024, hop_length=512, window="hanning"):
+        super(stft, self).__init__()
+        assert nfft % 2 == 0
+
+        self.hop_length = hop_length
+        self.n_freq = n_freq = nfft//2 + 1
+
+        self.real_kernels, self.imag_kernels = _get_stft_kernels(nfft, window)
+        self.real_kernels_size = self.real_kernels.size()
+        self.conv = nn.Sequential(
+            nn.Conv2d(1, self.real_kernels_size[0], kernel_size=(self.real_kernels_size[2], self.real_kernels_size[3]), stride=(self.hop_length)),
+            nn.BatchNorm2d(self.real_kernels_size[0]),
+            nn.Hardtanh(0, 20, inplace=True)
+        )
+    def forward(self, sample):
+        sample = sample.unsqueeze(1)
+        magn = self.conv(sample)
+
+        magn = magn.permute(0, 2, 1, 3)
+        return magn
+
+
+def _get_stft_kernels(nfft, window):
+    nfft = int(nfft)
+    assert nfft % 2 == 0
+
+    def kernel_fn(freq, time):
+        return np.exp(-1j * (2 * np.pi * time * freq) / float(nfft))
+
+    kernels = np.fromfunction(kernel_fn, (nfft//2+1, nfft), dtype=np.float64)
+
+    if window == "hanning":
+        win_cof = scipy.signal.get_window("hanning", nfft)[np.newaxis, :]
+    else:
+        win_cof = np.ones((1, nfft), dtype=np.float64)
+
+    kernels = kernels[:, np.newaxis, np.newaxis, :] * win_cof
+
+    real_kernels = nn.Parameter(torch.from_numpy(np.real(kernels)).float())
+    imag_kernels = nn.Parameter(torch.from_numpy(np.imag(kernels)).float())
+
+    return real_kernels, imag_kernels
 
 class PCEN(nn.Module):
     def __init__(self):
@@ -122,10 +168,14 @@ class WaveToLetter(nn.Module):
         self._labels = labels
         self._sample_rate=sample_rate
         self._window_size=window_size
+        self.mixed_precision=mixed_precision
 
         nfft = (self._sample_rate * self._window_size)
-        input_size = int(1+(nfft/2))
+        input_size = 1+int((nfft/2))
+        hop_length = sample_rate * self._audio_conf.get("window_stride", 0.01)
 
+        # self.pcen = PCEN()
+        self.frontEnd = stft(hop_length=int(hop_length), nfft=int(nfft))
         conv1 =  Cov1dBlock(input_size=input_size,output_size=256,kernal_size=(11,),stride=2,dilation=1,drop_out_prob=0.2,padding='same')
         conv2s = []
         conv2s.append(('conv1d_{}'.format(0),conv1))
@@ -170,22 +220,19 @@ class WaveToLetter(nn.Module):
         self.inference_softmax = InferenceBatchSoftmax()
 
     def forward(self, x):
-        # x = x.view(x.size(0),x.size(2),x.size(1))
+        x = self.frontEnd(x)
+        x = x.squeeze(1)
         x = self.conv1ds(x)
         x = x.transpose(1,2)
-        # sizes = x.size()
-        # x = x.view(sizes[2], sizes[0], sizes[1])
         x = self.inference_softmax(x)
-        # sizes = x.size()
-        # x = x.view(sizes[0], sizes[2], sizes[1])  # view the data as (batchsize * outputsize * numcharac)
 
         return x
 
     @classmethod
     def load_model(cls, path, cuda=False):
         package = torch.load(path, map_location=lambda storage, loc: storage)
-        model = cls(labels=package['labels'], audio_conf=package['audio_conf'],sample_rate=package.get('sample_rate',8000)
-                    ,window_size=package.get('window_size',0.02),mixed_precision=package.get('mixed_precision',False))
+        model = cls(labels=package['labels'], audio_conf=package['audio_conf'],sample_rate=package["sample_rate"]
+                    ,window_size=package["window_size"],mixed_precision=package.get('mixed_precision',False))
         # the blacklist parameters are params that were previous erroneously saved by the model
         # care should be taken in future versions that if batch_norm on the first rnn is required
         # that it be named something else
@@ -209,8 +256,8 @@ class WaveToLetter(nn.Module):
 
     @classmethod
     def load_model_package(cls, package, cuda=False):
-        model = cls(labels=package['labels'], audio_conf=package['audio_conf'],sample_rate=package.get('sample_rate',8000)
-                    ,window_size=package.get('window_size',0.02),mixed_precision=package.get('mixed_precision',False))
+        model = cls(labels=package['labels'], audio_conf=package['audio_conf'],sample_rate=package.get("sample_rate",16000)
+                    ,window_size=package.get("window_size",.02),mixed_precision=package.get('mixed_precision',False))
         model.load_state_dict(package['state_dict'])
         if cuda:
             model = torch.nn.DataParallel(model).cuda()

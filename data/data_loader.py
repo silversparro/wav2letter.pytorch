@@ -190,8 +190,7 @@ class SpectrogramParser(AudioParser):
 
     def parse_audio_w2l2(self, audio_path):
         if self.augment:
-            # y = load_randomly_augmented_audio(audio_path, self.sample_rate)
-            y = (load_randomly_augmented_audio(audio_path, self.sample_rate,w2l2=True)).astype(np.float32)
+            y = load_randomly_augmented_audio(audio_path, self.sample_rate)
         else:
             y = load_audio(audio_path)
         if self.peak_normalization:
@@ -201,29 +200,8 @@ class SpectrogramParser(AudioParser):
             add_noise = np.random.binomial(1, self.noise_prob)
             if add_noise:
                 y = self.noiseInjector.inject_noise(y)
-        n_fft = int(self.sample_rate * self.window_size)
-        win_length = n_fft
-        hop_length = int(self.sample_rate * self.window_stride)
 
-        D = librosa.stft(y, n_fft=n_fft, hop_length=hop_length,
-                         win_length=win_length, window=self.window)
-
-        spect, phase = librosa.magphase(D)
-        # S = log(S+1)
-        pcenResult = pcen2(E=spect, sr=self.sample_rate, hop_length=hop_length)
-
-        spect = np.log1p(spect)
-        mean = spect.mean()
-        std = spect.std()
-        spect = np.add(spect, -mean)
-        spect = spect / std
-        meanPcen = pcenResult.mean()
-        stdPcen = pcenResult.std()
-        # spect.add_(-mean)
-        # spect.div_(std)
-        pcenResult = np.add(pcenResult, -meanPcen)
-        pcenResult = pcenResult / stdPcen
-        return spect,pcenResult
+        return y,None
 
     def parse_transcript(self, transcript_path):
         raise NotImplementedError
@@ -257,18 +235,19 @@ class SpectrogramDataset(Dataset, SpectrogramParser):
     def __getitem__(self, index):
         sample = self.ids[index]
         audio_path, transcriptLoaded = sample[0], sample[-1]
-        transcriptToUse=transcriptLoaded
+        # transcriptToUse=transcriptLoaded
         if self.w2l2:
             spect,magnitudeOfAudio = self.parse_audio_w2l2(audio_path)
         else:
             spect, magnitudeOfAudio = self.parse_audio(audio_path)
-        transcript = list(filter(None, [self.labels_map.get(x) for x in list(transcriptToUse)]))
+        transcript = self.parse_transcript(transcriptLoaded)
+        transcriptToUse = transcript
         return spect, transcript, magnitudeOfAudio, audio_path, transcriptToUse
 
     def parse_transcript(self, transcript_path):
         with open(transcript_path, 'r') as transcript_file:
             transcript = transcript_file.read().replace('\n', '')
-        transcript = list(filter(None, [self.labels_map.get(x) for x in list(transcript)]))
+        transcript = list(filter(None, [self.labels_map.get(x.lower()) for x in list(transcript)]))
         return transcript
 
     def __len__(self):
@@ -282,15 +261,14 @@ class SpectrogramDataset(Dataset, SpectrogramParser):
 
 def _collate_fn(batch):
     def func(p):
-        return p[0].shape[1]
+        return p[0].shape[0]
 
     longest_sample = max(batch, key=func)[0]
-    freq_size = longest_sample.shape[0]
+    # freq_size = longest_sample.shape[0]
     minibatch_size = len(batch)
-    max_seqlength = longest_sample.shape[1]
-    inputs = torch.zeros(minibatch_size, freq_size,max_seqlength)
-    # inputs = torch.zeros(minibatch_size, max_seqlength,freq_size)
-    inputsMags = torch.zeros(minibatch_size, freq_size,max_seqlength)
+    max_seqlength = longest_sample.shape[0]
+    inputs = torch.zeros(minibatch_size, 1, max_seqlength)
+    inputsMags = torch.zeros(minibatch_size, 1, max_seqlength)
     input_percentages = torch.FloatTensor(minibatch_size)
     target_sizes = torch.IntTensor(minibatch_size)
     targets = []
@@ -303,17 +281,16 @@ def _collate_fn(batch):
         tensorMag = sample[2]
         tensorPath = sample[3]
         orignalTranscription = sample[4]
-        seq_length = tensor.shape[1]
+        seq_length = tensor.shape[0]
         tensorShape = tensor.shape
         # tensorMagShape = tensorMag.shape
-        tensorNew = np.pad(tensor,((0,0),(0,abs(tensorShape[1]-max_seqlength))),'wrap')
-        # tensorNew = np.pad(tensor,((0,abs(tensorShape[0]-max_seqlength)),(0,0)),'constant', constant_values=(0))
+        # tensorNew = np.pad(tensor,((0,0),(0,abs(tensorShape[1]-max_seqlength))),'wrap')
+        tensorNew = np.pad(tensor, (0,abs(tensorShape[0]-max_seqlength)), 'constant', constant_values=(0))
+        inputs[x][0].copy_(torch.FloatTensor(tensorNew))
         if tensorMag is not None:
             tensorMagNew = np.pad(tensorMag,((0,0),(0,abs(tensorShape[1]-max_seqlength))),'wrap')
-            inputsMags[x].copy_(torch.FloatTensor(tensorMagNew))
-
-        # inputs[x].narrow(0, 1, max_seqlength).copy_(torch.FloatTensor(tensorNew))
-        inputs[x].copy_(torch.FloatTensor(tensorNew))
+            inputsMags[x][0].narrow(1, 0, max_seqlength).copy_(torch.FloatTensor(tensorMagNew))
+        # inputs[x][0].narrow(1, 0, max_seqlength).copy_(torch.FloatTensor(tensorNew))
         input_percentages[x] = seq_length / float(max_seqlength)
         target_sizes[x] = len(target)
         targets.extend(target)
