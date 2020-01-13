@@ -77,11 +77,12 @@ if __name__ == '__main__':
 	total_cer, total_wer = 0, 0
 	output_data = []
 	for i, (data) in tqdm(enumerate(test_loader), total=len(test_loader)):
-		inputs, targets, input_percentages, target_sizes, inputFilePaths, inputsMags = data
+		inputs, targets, input_percentages, target_sizes, inputfilePaths,inputsMags = data
 
+		inputsMags = Variable(inputsMags, volatile=True)
 		inputs = Variable(inputs, volatile=True)
-		inputs = inputs.to(device)
-
+		# if model.mixed_precision:
+		# inputs = inputs.half()
 		# unflatten targets
 		split_targets = []
 		offset = 0
@@ -89,13 +90,17 @@ if __name__ == '__main__':
 			split_targets.append(targets[offset:offset + size])
 			offset += size
 
-		# if args.cuda:
-		#     inputsMags = inputsMags.cuda()
+		if args.cuda:
+			inputs = inputs.to(device)
+			inputsMags = inputsMags.to(device)
 		beforeInferenceTime = time.time()
-		out = model(inputs)  # NxTxH
-		seq_length = out.size(1)
-
+		if args.usePcen:
+			out = model(inputsMags)
+		else:
+			out = model(inputs)
 		afterInferenceTime = time.time()
+		# out = out.transpose(0, 1)  # TxNxH
+		seq_length = out.size(1)
 		sizes = input_percentages.mul_(int(seq_length)).int()
 
 		if decoder is None:
