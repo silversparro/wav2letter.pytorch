@@ -17,6 +17,8 @@ Branch  python27 : contains the same code as of master but for python2.7 and pyt
 * Audio augmentation to improve noise robustness.
 * Easy start/stop capabilities in the event of crash or hard stop during training.
 * Visdom/Tensorboard support for visualizing training graphs.
+* Train the model directly on the raw wav form and removed the dependency of creating spectogram. (The old code is shifted to branch 'speechRecognitionSpectogram' )
+
 
 # Installation
 
