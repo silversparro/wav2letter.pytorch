@@ -235,18 +235,19 @@ class SpectrogramDataset(Dataset, SpectrogramParser):
     def __getitem__(self, index):
         sample = self.ids[index]
         audio_path, transcriptLoaded = sample[0], sample[-1]
-        transcriptToUse=transcriptLoaded
+        # transcriptToUse=transcriptLoaded
         if self.w2l2:
             spect,magnitudeOfAudio = self.parse_audio_w2l2(audio_path)
         else:
             spect, magnitudeOfAudio = self.parse_audio(audio_path)
-        transcript = list(filter(None, [self.labels_map.get(x) for x in list(transcriptToUse)]))
+        transcript = self.parse_transcript(transcriptLoaded)
+        transcriptToUse = transcript
         return spect, transcript, magnitudeOfAudio, audio_path, transcriptToUse
 
     def parse_transcript(self, transcript_path):
         with open(transcript_path, 'r') as transcript_file:
             transcript = transcript_file.read().replace('\n', '')
-        transcript = list(filter(None, [self.labels_map.get(x) for x in list(transcript)]))
+        transcript = list(filter(None, [self.labels_map.get(x.lower()) for x in list(transcript)]))
         return transcript
 
     def __len__(self):
