@@ -9,6 +9,9 @@ Branch trainableFrontEnd : contains the code in progress to train the model usin
 
 Branch  python27 : contains the same code as of master but for python2.7 and pytorch0.4.1
 
+Current Checkpoint can be downloaded from : https://drive.google.com/file/d/1HH_4TkPUrfcfRSUp2wqgKUu72bfJ8y8t/view?usp=sharing
+
+NOTE : The model is giving around 37WER with greedy decoder and the performance can be improved by using a beam decoder and a language model
 ## Features
 
 * Train Wav2Letter.
