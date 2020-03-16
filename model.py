@@ -156,6 +156,31 @@ class Cov1dBlock(nn.Module):
 
         return output
 
+class AttentionBlock(nn.Module):
+    def __init__(self, input_size, output_size, kernal_size, stride, drop_out_prob=-1.0, dilation=1, bn=True,activationUse=True):
+        super(AttentionBlock, self).__init__()
+        self.input_size = input_size
+        self.output_size = output_size
+        self.kernal_size = kernal_size
+        self.stride = stride
+        self.dilation = dilation
+        self.drop_out_prob = drop_out_prob
+        self.activationUse = activationUse
+        self.padding = kernal_size[0] #(kernal_size[0]-stride)//2 if kernal_size[0]!=1 else
+        self.rows_odd = False
+        self.conv1Converter = nn.Sequential(
+
+            nn.Conv1d(in_channels=input_size, out_channels=output_size, kernel_size=kernal_size,
+                      stride=stride, padding=(0), dilation=dilation),
+        )
+        self.batchNorm = nn.BatchNorm1d(num_features=output_size,momentum=0.90,eps=0.001) if bn else None
+        self.drop_out_layer = nn.Dropout(drop_out_prob) if self.drop_out_prob != -1 else None
+
+    def forward(self, frontEndData, lastLayerData,hid=None):
+        intermediateOutput = self.conv1Converter(frontEndData) # should get the shape as that of the last layer
+        attention = torch.add(intermediateOutput,lastLayerData)
+        return attention
+
 class WaveToLetter(nn.Module):
     def __init__(self,sample_rate,window_size, labels="abc",audio_conf=None,mixed_precision=False):
         super(WaveToLetter, self).__init__()
@@ -213,16 +238,19 @@ class WaveToLetter(nn.Module):
         conv2s.append(('conv1d_{}'.format(16), conv1))
         conv1 = Cov1dBlock(input_size=896, output_size=1024, kernal_size=(1,), stride=1, dilation=1, drop_out_prob=0.4)
         conv2s.append(('conv1d_{}'.format(17), conv1))
-        conv1 = Cov1dBlock(input_size=1024, output_size=len(self._labels), kernal_size=(1,),stride=1,bn=False,activationUse=False)
-        conv2s.append(('conv1d_{}'.format(18), conv1))
+        self.softmaxConv = Cov1dBlock(input_size=1024, output_size=len(self._labels), kernal_size=(1,),stride=1,bn=False,activationUse=False)
+        self.attention = AttentionBlock(input_size=161,output_size=1024,kernal_size=(1,),stride=(2),bn=False,activationUse=False)
+        # conv2s.append(('conv1d_{}'.format(18), conv1))
 
         self.conv1ds = nn.Sequential(OrderedDict(conv2s))
         self.inference_softmax = InferenceBatchSoftmax()
 
     def forward(self, x):
-        x = self.frontEnd(x)
-        x = x.squeeze(1)
-        x = self.conv1ds(x)
+        xFrontEnd = self.frontEnd(x)
+        xFrontEnd = xFrontEnd.squeeze(1)
+        x = self.conv1ds(xFrontEnd)
+        x = self.attention(xFrontEnd,x)
+        x = self.softmaxConv(x)
         x = x.transpose(1,2)
         x = self.inference_softmax(x)
 
