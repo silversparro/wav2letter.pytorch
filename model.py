@@ -179,6 +179,8 @@ class AttentionBlock(nn.Module):
     def forward(self, frontEndData, lastLayerData,hid=None):
         intermediateOutput = self.conv1Converter(frontEndData) # should get the shape as that of the last layer
         attention = torch.add(intermediateOutput,lastLayerData)
+        if self.activationUse:
+            attention = torch.clamp(input=attention, min=0, max=20)
         return attention
 
 class WaveToLetter(nn.Module):
@@ -236,10 +238,10 @@ class WaveToLetter(nn.Module):
 
         conv1 = Cov1dBlock(input_size=inputSize, output_size=896, kernal_size=(29,), stride=1, dilation=2, drop_out_prob=0.4)
         conv2s.append(('conv1d_{}'.format(16), conv1))
-        conv1 = Cov1dBlock(input_size=896, output_size=1024, kernal_size=(1,), stride=1, dilation=1, drop_out_prob=0.4)
-        conv2s.append(('conv1d_{}'.format(17), conv1))
+        self.conv1Fc = Cov1dBlock(input_size=896, output_size=1024, kernal_size=(1,), stride=1, dilation=1, drop_out_prob=0.4)
+        # conv2s.append(('conv1d_{}'.format(17), conv1))
         self.softmaxConv = Cov1dBlock(input_size=1024, output_size=len(self._labels), kernal_size=(1,),stride=1,bn=False,activationUse=False)
-        self.attention = AttentionBlock(input_size=161,output_size=1024,kernal_size=(1,),stride=(2),bn=False,activationUse=False)
+        self.attention = AttentionBlock(input_size=161,output_size=896,kernal_size=(1,),stride=(2),bn=False,activationUse=False)
         # conv2s.append(('conv1d_{}'.format(18), conv1))
 
         self.conv1ds = nn.Sequential(OrderedDict(conv2s))
@@ -250,6 +252,7 @@ class WaveToLetter(nn.Module):
         xFrontEnd = xFrontEnd.squeeze(1)
         x = self.conv1ds(xFrontEnd)
         x = self.attention(xFrontEnd,x)
+        x = self.conv1Fc(x)
         x = self.softmaxConv(x)
         x = x.transpose(1,2)
         x = self.inference_softmax(x)
