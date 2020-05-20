@@ -5,6 +5,9 @@ Creates a network based on the [Wav2Letter](https://arxiv.org/abs/1609.03193) ar
 
 Currently Tested on pytorch [1.3.1] with cuda10.1 and python3.7.
 
+Branch selfAttentionExps : contains the code having the attention layer in b/w the final layer and the starting layer.
+                           improves the training time.
+
 Branch trainableFrontEnd : contains the code in progress to train the model using the raw audio samples only.
 
 Branch  python27 : contains the same code as of master but for python2.7 and pytorch0.4.1
